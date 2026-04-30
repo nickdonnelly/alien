@@ -88,19 +88,13 @@ func cycleAndEmit(step int) string {
 	return emitFzfActions(next)
 }
 
-// emitFzfActions builds a single line of fzf actions that retargets the
-// picker to `tab`: reload the data, swap the prompt, refresh the header,
-// and clear the previous query so the user sees all entries in the new
-// scope.
-//
-// fzf parses actions joined with `+`; newlines inside change-header(...)
-// must be the literal `\n` escape (two chars), not a real newline, so we
-// post-process the multi-line header text accordingly.
+// emitFzfActions retargets the picker to `tab`: reload the data, swap the
+// prompt, and clear the previous query so the user sees all entries in the
+// new scope. The picker's header is emitted as the first three lines of
+// `alien fzf` output (consumed by --header-lines=3), so a reload alone
+// refreshes the header — no `change-header` action needed, which sidesteps
+// fzf's lack of \n interpretation inside transform output.
 func emitFzfActions(tab string) string {
-	s, _ := loadStore()
-	header := buildPickerHeader(s, tab)
-	headerEsc := strings.ReplaceAll(header, "\n", `\n`)
-
 	prompt := "👽 alien"
 	if tab != "all" {
 		prompt = "👽 " + tabLabel(tab)
@@ -110,8 +104,6 @@ func emitFzfActions(tab string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "reload(alien fzf --filter %s)", tab)
 	fmt.Fprintf(&b, "+change-prompt(%s)", prompt)
-	fmt.Fprintf(&b, "+change-header(%s)", headerEsc)
-	b.WriteString("+clear-query")
-	b.WriteString("\n")
+	b.WriteString("+clear-query\n")
 	return b.String()
 }

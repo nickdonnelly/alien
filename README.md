@@ -1,52 +1,90 @@
 # 👽 alien
 
-Quick command-line aliases. Run a command, like it, type `alien <name>`, done.
+> Quick command-line aliases. Run a command, like it, type `alien <name>`, done.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Shells](https://img.shields.io/badge/shells-zsh%20%7C%20bash-blueviolet)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+
+`alien` turns your shell history into reusable aliases without leaving the
+prompt. Run a command, decide it's worth keeping, type `alien <name>`, and
+the alias is live in your current shell. No rc-file editing, no `exec zsh`.
+
+![demo](demo.gif)
+
+```sh
+$ ls -alh ~/.config | head -6
+…
+$ alien lc -m "list ~/.config"
+✓ aliased lc → ls -alh ~/.config | head -6
+
+$ lc
+…
 ```
-$ ls -al
-$ alien ll
-✓ aliased ll → ls -al
 
-$ ll
-total 24
-drwxr-xr-x  9 you  staff  288 Apr 29 10:12 .
-...
-```
+---
 
-The new alias is active **immediately in the current shell** — no `exec zsh`,
-no manual sourcing.
+## Highlights
+
+- **One-keypress aliasing** — `alien <name>` reads the previous command from
+  shell history, stores it, and sources it into the running shell.
+- **Fuzzy picker** — press <kbd>Ctrl-G</kbd> (or run `a`) to browse every
+  alias you have. Search by name, command, or comment. Hit <kbd>Enter</kbd>
+  to run, <kbd>Tab</kbd> to insert the alias name into your prompt.
+- **Tabs** — <kbd>[</kbd> / <kbd>]</kbd> in the picker switch between
+  *all* / *user* / *shell* and one tab per installed pack.
+- **UFO packs** 🛸 — install topical bundles of aliases (docker, git, files,
+  nav) with conflict-aware select/rename in a Bubble Tea TUI. Build and
+  share your own packs.
+- **Imports your existing rc aliases** — anything in your `.zshrc`,
+  `.bashrc`, oh-my-zsh plugins, etc. is indexed for search; alien shows
+  *which file* each came from in the FROM column.
+- **Optional git sync** — version-control your aliases and sync them
+  across machines. `alien sync init <repo>` and you're done.
+- **Fast** — pure-Go binary, no external deps beyond
+  [fzf](https://github.com/junegunn/fzf). Picker renders in milliseconds
+  even with hundreds of aliases.
+- **zsh and bash** — works on macOS bash 3.2 too, no upgrade required.
 
 ## Install
 
-```bash
+### From source
+
+```sh
+git clone https://github.com/nick-donnelly/alien
+cd alien
 ./install.sh
 ```
 
-This builds the binary, installs it to `~/.local/bin/alien`, and (with your
-confirmation) appends the shell hook to your `~/.zshrc` or `~/.bashrc`.
-Open a new shell afterwards.
+`install.sh` builds the binary, installs it to `~/.local/bin/alien`, and
+(with your confirmation) appends the shell hook to your rc file.
 
-If you'd rather wire it up by hand:
+### Manual
 
-```bash
+```sh
 go build -o alien .
 mv alien ~/.local/bin/
 
-# then, in your rc file:
-source <(alien init zsh)        # zsh
-eval "$(alien init bash)"       # bash (works on bash 3.2 too)
+# zsh:
+echo 'source <(alien init zsh)' >> ~/.zshrc
+
+# bash (works on the macOS-default bash 3.2 too):
+echo 'eval "$(alien init bash)"' >> ~/.bashrc
 ```
 
-Requires Go (to build) and [fzf](https://github.com/junegunn/fzf) (for the
-fuzzy picker).
+### Requirements
 
-## How you use it
+- Go 1.24+ (build only)
+- `fzf` (for the fuzzy picker — install via your package manager)
+- `git` (only for `alien sync`)
+
+## Usage
 
 ```text
-alien <name>                add an alias for the command you just ran
+alien <name>                add an alias from the command you just ran
 alien <name> -c "cmd"       add an explicit alias
 alien <name> -m "comment"   describe what it does
-a <name>                    same as `alien <name>` (short form)
+a <name>                    short form of `alien <name>`
 
 alien list                  pretty list of all aliases
 alien show <name>           details for one alias
@@ -57,177 +95,193 @@ alien delete <name>         remove (with confirmation)
 alien promote <name>        take ownership of a shell-imported alias
 ```
 
-### Sources: user · shell · pack
+### The picker
 
-Every alias has a *source*. The picker badges them so you always know what
-you're looking at:
+Press <kbd>Ctrl-G</kbd> or run `a` to open it.
 
-```text
-● gst       git status              # quick status
-● dps       docker ps               [pack:docker]  # running containers
-● ll        ls -lah                 [shell]        # from your .zshrc
-○ deploy    ./scripts/deploy.sh                    # disabled
+```
+ALIAS         COMMAND                              FROM
+❯ all  user  shell  🛸 docker  🛸 git
+enter:run · tab:insert · ctrl-e:edit · ctrl-d:delete · [/]:tabs · esc:cancel
+› ● ll      ls -alh                              .zshrc
+  ● gst     git status                           🛸 git    # status
+  ● dps     docker ps                            🛸 docker # running
+  ● foo     echo foo
 ```
 
-- **user** (no badge): you added it via `alien <name>`.
-- **shell**: defined in your rc / plugins. alien indexes them on shell
-  startup so the picker is one search surface for *all* your aliases.
-  alien refuses to delete or edit them — they live in your rc, not here.
-  Run `alien promote <name>` to take ownership.
-- **pack:`<name>`**: installed by `alien ufo install <name>`. Cleanly
-  removed by `alien ufo uninstall <name>`.
+| Key                              | Action                                    |
+|----------------------------------|-------------------------------------------|
+| type                             | fuzzy-search across name, command, FROM   |
+| <kbd>Enter</kbd>                 | run the alias's command in this shell     |
+| <kbd>Tab</kbd>                   | insert the alias name into the prompt     |
+| <kbd>Ctrl-E</kbd>                | open the alias for editing in `$EDITOR`   |
+| <kbd>Ctrl-D</kbd>                | delete (with confirmation)                |
+| <kbd>[</kbd> / <kbd>]</kbd>      | cycle tabs (all / user / shell / packs)   |
+| <kbd>Esc</kbd>                   | cancel                                    |
 
-Type `shell` or `pack:docker` into the picker to scope your search.
+> ℹ️ <kbd>Ctrl-E</kbd>/<kbd>Ctrl-D</kbd> instead of plain `e`/`d` —
+> fzf reads letter keys as filter input, so using them as actions would
+> break fuzzy search.
 
-## UFO packs
+### UFO packs
 
-A *pack* (or *ufo*, on theme) is a bundle of topical aliases — docker
-shortcuts, common git aliases, file utilities — that you can install in one
-go and uninstall just as cleanly. alien ships with a few starter packs
-embedded in the binary; you can also build and share your own.
+A *pack* is a small bundle of related aliases. alien ships with four:
 
-```text
-alien ufo list                        # installed + built-in available
+| Pack     | What's inside                                                       |
+|----------|---------------------------------------------------------------------|
+| `git`    | `gst`, `gco`, `gcb`, `gp`, `gpl`, `gl`, `glg`, `gd`, `gsta`, ...    |
+| `docker` | `dps`, `dpsa`, `di`, `dlog`, `dexec`, `dcu`, `dcd`, `dcl`, ...       |
+| `files`  | `ll`, `la`, `lt`, `lsize`, `mkp`, `cpv`, `mvv`, `duh`, ...           |
+| `nav`    | `..`, `...`, `....`, `cdtmp`, `cddl`, `cdp`, ...                    |
+
+```sh
+alien ufo list                        # built-in + installed
 alien ufo show docker                 # preview pack contents
-alien ufo install docker              # opens an interactive TUI browser
-alien ufo install docker -y           # non-interactive, auto-rename conflicts
+alien ufo install docker              # interactive TUI: select / rename / install
 alien ufo install ./mypack.ufo.json   # install from a file
-alien ufo install https://…/x.ufo.json # install from a URL
+alien ufo install https://…/x.ufo.json
 alien ufo uninstall docker            # remove only the entries this pack added
-alien ufo create mypack > mypack.ufo.json   # publish your own user aliases
+alien ufo create mypack > mypack.ufo.json  # turn your user-aliases into a pack
 alien ufo export docker               # dump an installed pack back to JSON
 ```
 
-The interactive install browser (Bubble Tea) lets you select/deselect
-individual aliases, sees and warns about conflicts (with your aliases,
-shell aliases, or other installed packs), and lets you press `r` to rename
-on the spot.
+The interactive installer (Bubble Tea) lets you toggle individual aliases,
+sees and warns about conflicts (with your aliases, shell aliases, or other
+installed packs), and lets you press <kbd>r</kbd> to rename on the spot.
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 👽 alien ufo › install: docker v1.0.0                        │
-│ Common Docker and Compose shortcuts                          │
-├──────────────┬───────────────────────────────────────────────┤
-│ › [x] dps    │ command : docker ps                           │
-│   [x] dpsa   │ comment : list running containers             │
-│   [ ] di  ⚠  │ status  : conflicts with your alias           │
-│   [x] dlog   │ install : di-docker (renamed from di)         │
-├──────────────┴───────────────────────────────────────────────┤
-│ space:toggle  a:all  n:none  r:rename  enter:install  q:quit │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Pack file format (`.ufo.json`)
+#### Pack file format
 
 ```json
 {
   "ufo": {
-    "name": "docker",
+    "name": "mypack",
     "version": "1.0.0",
-    "description": "Common Docker shortcuts",
+    "description": "A small bundle",
     "author": "you"
   },
   "aliases": {
-    "dps":  { "command": "docker ps",     "comment": "running containers" },
-    "dpsa": { "command": "docker ps -a",  "comment": "all containers" }
+    "ll":  { "command": "ls -alh", "comment": "long listing" },
+    "gst": { "command": "git status", "comment": "status" }
   }
 }
 ```
 
-Built-in starter packs: **docker**, **git**, **files**, **nav**.
+We'd love community packs — open a PR with a new file under `packs/`.
 
-## Sync
+### Sources: user · shell · pack
 
-Opt-in. `alien sync` makes your `$ALIEN_HOME` directory a git working tree,
-so you get version control *and* cross-machine sync from the same feature.
+Every alias has a *source*. The picker badges them:
 
-```text
-alien sync init <repo-url>     # set up; pulls if remote has content,
-                               # otherwise pushes the local state
-alien sync push [-m "msg"]     # commit + push current state
-alien sync pull                # pull --rebase, surface conflicts
-alien sync status              # short status
-alien sync auto on             # auto-pull on shell startup, auto-push after changes
-alien sync auto off            # turn that off
-alien sync auto on push        # only one direction
-alien sync forget              # disconnect (rm .git, sync.json)
+- **user** — you added it via `alien <name>`. No badge.
+- **shell** — defined in your rc / oh-my-zsh plugin. Badge shows the file
+  it came from (`.zshrc`, `omz:git`, etc.). alien refuses to delete or
+  edit these — they live in your rc, not here. Run
+  `alien promote <name>` to take ownership.
+- **pack:`<name>`** — installed via `alien ufo install`. Badge: 🛸 *name*.
+  Cleanly removed by `alien ufo uninstall`.
+
+### Sync (optional)
+
+`alien sync` makes `$ALIEN_HOME` a git working tree, so you get version
+control *and* cross-machine sync from one feature.
+
+```sh
+alien sync init <repo-url>   # set up; pulls if remote has content,
+                             # otherwise pushes the local state
+alien sync push [-m "msg"]   # commit + push
+alien sync pull              # pull --rebase, surface conflicts
+alien sync status            # short status
+alien sync auto on           # auto-pull on shell startup,
+                             # auto-push after changes (debounced)
+alien sync auto off
+alien sync forget            # disconnect (rm .git, sync.json)
 ```
 
-Only `aliases.json` is tracked — generated `aliases.sh`, sync state, and
-backup files are gitignored.
+Only `aliases.json` is tracked. Generated files (`aliases.sh`, sync state)
+are gitignored. Conflicts surface as standard git conflict markers in
+`aliases.json`; resolve them in your editor and `alien sync push`.
 
-When auto-sync is on, the shell hook runs a throttled `sync maybe-pull`
-(default: at most once every 5 minutes per shell) and a backgrounded
-`sync maybe-push` after each `alien` modification. Both are no-ops if
-auto-sync is off, so leaving them in the hook costs nothing.
-
-Conflict path: if `aliases.json` diverged across machines, `alien sync pull`
-surfaces git's standard conflict markers in `aliases.json`. Resolve them
-in your editor, then `git -C $ALIEN_HOME rebase --continue` and
-`alien sync push`.
-
-### The fuzzy picker
-
-Press **Ctrl-G** in your shell to open the picker:
-
-```text
-👽 alien › ll                                      enter:run · tab:insert · ctrl-e:edit · ctrl-d:delete · esc:cancel
-  › ● ll      ls -al                # long listing
-    ● gst     git status            # quick status
-    ○ deploy  ./scripts/deploy.sh   # disabled
-```
-
-- **enter** runs the alias's command in your current shell
-- **tab** inserts the alias name into your prompt (no execute yet)
-- **ctrl-e** opens the alias for editing in `$EDITOR`
-- **ctrl-d** prompts to delete it
-- type to fuzzy-search across name, command, and comment
-
-> Why ctrl-e/ctrl-d instead of plain `e`/`d`? fzf reads letter keys as
-> filter input — using them as actions would break fuzzy search.
-
-You can also type `a` with no arguments to open the picker.
-
-## Configuration
+### Configuration
 
 Set these before sourcing the hook (e.g. in `~/.zshrc`):
 
-| Variable          | Default                    | Purpose                                |
-|-------------------|----------------------------|----------------------------------------|
-| `ALIEN_HOME`      | `$XDG_CONFIG_HOME/alien`   | where aliases.json lives               |
-| `ALIEN_KEYBIND`   | `^G` (zsh) / `\C-g` (bash) | picker keybinding; empty to disable    |
-| `ALIEN_FZF_OPTS`  | (empty)                    | extra flags forwarded to fzf           |
+| Variable          | Default                       | Purpose                                |
+|-------------------|-------------------------------|----------------------------------------|
+| `ALIEN_HOME`      | `$XDG_CONFIG_HOME/alien`      | where `aliases.json` lives             |
+| `ALIEN_KEYBIND`   | `^G` (zsh) / `\C-g` (bash)    | picker keybinding; empty disables      |
+| `ALIEN_FZF_OPTS`  | (empty)                       | extra flags forwarded to fzf           |
+| `ALIEN_RC_FILES`  | auto-detected                 | colon-separated rc files to scan       |
 
 ## Storage
 
-Aliases are kept in `$ALIEN_HOME/aliases.json` (default
-`~/.config/alien/aliases.json`). The binary regenerates `aliases.sh` from
-that on every change; the shell hook sources that file so new aliases
-activate instantly. Shell-source entries (already defined in your rc) are
-indexed for search but *not* re-emitted into `aliases.sh`.
-
-Files in `$ALIEN_HOME`:
+Aliases live in `$ALIEN_HOME/aliases.json` (default `~/.config/alien/`).
+The binary regenerates `aliases.sh` from that on every change; the shell
+hook sources it, so new aliases are live immediately in the running shell.
 
 | File             | Purpose                                                         |
 |------------------|-----------------------------------------------------------------|
-| `aliases.json`   | source of truth (user + pack + shell entries, atomic writes)    |
+| `aliases.json`   | source of truth (atomic writes)                                 |
 | `aliases.sh`     | generated cache; sourced by your shell hook                     |
 | `sync.json`      | sync remote URL + auto-sync flags (gitignored)                  |
 | `.last_pull`     | throttle marker for auto-pull (gitignored)                      |
+| `.tab`           | active picker tab (per-shell-session)                           |
 | `.git/`          | only present after `alien sync init`                            |
 
-## Why a Go binary plus shell scripts?
+## How it works
 
-- **Speed.** Alias storage operations are a few milliseconds.
-- **Single binary.** No interpreter, no runtime deps beyond fzf.
-- **Shell-native where it has to be.** Capturing `fc -ln -1`, sourcing
-  aliases into the *current* shell, and binding ZLE / readline widgets
-  cannot be done from a subprocess — those parts live in the shell hook.
+A Go binary owns storage, queries, packs, sync. A small shell script (zsh
+or bash) wires it into your shell:
+
+- captures your previous command via `fc -ln -1` so `alien <name>` can
+  read it
+- sources the regenerated `aliases.sh` on every alien call so new aliases
+  go live immediately
+- pipes `alias` into `alien import-shell` on every shell start so the
+  picker can search rc-defined aliases too
+- binds <kbd>Ctrl-G</kbd> to a ZLE / readline widget that runs the fzf
+  picker and applies the chosen action (run / insert / edit / delete)
+
+The pack browser is a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+TUI; the fuzzy picker is plain [fzf](https://github.com/junegunn/fzf)
+with custom keybindings.
+
+## Contributing
+
+Issues and PRs welcome.
+
+- **New built-in packs** — drop a `name.ufo.json` into `packs/` and open
+  a PR. Keep them small, opinionated, and well-described.
+- **Bug reports** — please include `alien --version`, your shell, fzf
+  version, and a reproduction.
+- **Patches** — `go build` and the existing smoke-test paths must keep
+  working: `alien fzf`, `alien tab next/prev`, `alien ufo install -y`,
+  `alien sync init` against a local bare repo.
+
+```sh
+git clone https://github.com/nick-donnelly/alien
+cd alien
+go build -o alien .
+go vet ./...
+```
 
 ## Uninstall
 
-```bash
+```sh
 make uninstall                  # remove the binary
 rm -rf ~/.config/alien          # remove your aliases (irreversible)
-# delete the `source <(alien init …)` line from your rc file
+# delete the alien hook line from your rc file
 ```
+
+## License
+
+[MIT](LICENSE) — see LICENSE.
+
+## Credits
+
+- [fzf](https://github.com/junegunn/fzf) — the fuzzy finder that powers
+  the picker
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) and
+  [Lip Gloss](https://github.com/charmbracelet/lipgloss) — the TUI
+  framework behind the pack browser
+- [VHS](https://github.com/charmbracelet/vhs) — the recorder used to
+  generate the demo above

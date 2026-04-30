@@ -311,11 +311,14 @@ func matchesTab(a Alias, tab string) bool {
 	}
 }
 
-// cmdFzfList prints one line per alias in a tab-delimited form designed for
-// the shell's fzf widget. The first column (alias name, no ANSI) is what the
-// shell extracts; the second column is a pre-colored display string.
+// cmdFzfList prints fzf-ready output. The first three lines are the header
+// (column labels, tab strip, key hints) — fzf is invoked with
+// --header-lines=3 so they're shown above the list and excluded from the
+// selectable items. Header lines deliberately contain no tab character so
+// fzf renders them verbatim instead of trying to apply --with-nth.
 //
-//	NAME\tDISPLAY
+// Lines 4+ are the data, formatted as `NAME\tDISPLAY`. The shell extracts
+// the alias name from column 1 of the user's choice.
 //
 // Accepts --filter <tab> to scope to one of the tabs above.
 func cmdFzfList(args []string) {
@@ -335,6 +338,15 @@ func cmdFzfList(args []string) {
 	}
 
 	maxName, maxCmd, maxFrom := columnWidths(s, names)
+	// Print the three header lines first. Each is prefixed with a tab so
+	// fzf's --with-nth=2 --delimiter=\t treats column 1 as a hidden field
+	// (matching the data-row format) and renders the visible content from
+	// column 2. Without this, header rows would show as empty in fzf
+	// because column 2 of an unsplit line is empty.
+	for _, line := range strings.Split(buildPickerHeader(s, filter, maxName, maxCmd, maxFrom), "\n") {
+		fmt.Printf("\t%s\n", line)
+	}
+
 	for _, n := range names {
 		a := s.Aliases[n]
 		dot := green("●")
@@ -407,23 +419,29 @@ func padRightVisible(s string, w int) string {
 	return s + strings.Repeat(" ", gap)
 }
 
-// cmdFzfHeader emits the multi-line header text shown above the picker:
-// column labels, then a tab strip with the current tab marked, then key
-// hints. The shell wires this to fzf's --header (initial render) and to
-// `change-header(...)` actions on bracket presses.
-func cmdFzfHeader(args []string) {
-	_, filter := extractFlag(args, "--filter")
-	s, _ := loadStore()
-	fmt.Print(buildPickerHeader(s, filter))
-}
-
-// buildPickerHeader composes the three header lines.
-func buildPickerHeader(s *Store, currentTab string) string {
+// buildPickerHeader composes three lines: column labels (aligned with the
+// data widths), the tab strip with the active tab marked, and the keybind
+// hints. The data widths come from cmdFzfList so the labels line up with
+// the underlying columns even as content changes.
+func buildPickerHeader(s *Store, currentTab string, nameW, cmdW, fromW int) string {
 	if currentTab == "" {
 		currentTab = "all"
 	}
-	// Column labels — fixed widths so the header is stable across reloads.
-	cols := dim(fmt.Sprintf("  %-12s  %-50s  %s", "ALIAS", "COMMAND", "FROM"))
+	if nameW < 5 {
+		nameW = 5 // matches "ALIAS"
+	}
+	if cmdW < 7 {
+		cmdW = 7 // matches "COMMAND"
+	}
+	if fromW < 4 {
+		fromW = 4 // matches "FROM"
+	}
+	// Column labels: leading "  " accounts for the status glyph + space the
+	// data rows print; remaining columns mirror the data row spacing.
+	cols := dim(fmt.Sprintf("  %s  %s  %s",
+		padRight("ALIAS", nameW),
+		padRight("COMMAND", cmdW),
+		padRight("FROM", fromW)))
 
 	// Tab strip.
 	tabs := availableTabs(s)

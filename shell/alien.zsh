@@ -94,14 +94,11 @@ _alien_run_fzf() {
   # a previous picker session to silently filter the next one.
   command alien tab set all >/dev/null 2>&1
 
-  local _alien_tab="all"
-  local _alien_header
-  _alien_header=$(command alien fzf-header --filter "$_alien_tab")
-
-  command alien fzf --filter "$_alien_tab" 2>/dev/null | fzf \
+  command alien fzf --filter all 2>/dev/null | fzf \
     --ansi \
     --delimiter=$'\t' \
     --with-nth=2 \
+    --header-lines=3 \
     --no-multi \
     --reverse \
     --height=50% \
@@ -109,7 +106,6 @@ _alien_run_fzf() {
     --pointer='›' \
     --marker='✓' \
     --prompt='👽 alien › ' \
-    --header="$_alien_header" \
     --color='border:bright-cyan,prompt:bright-cyan,pointer:bright-magenta,header:gray,info:gray,hl:bright-yellow,hl+:bright-yellow' \
     --expect='tab,ctrl-e,ctrl-d' \
     --bind '[:transform(alien tab prev)' \
@@ -135,8 +131,11 @@ _alien_fzf_widget() {
 
   case "$key" in
     "")
-      cmd=$(command alien get "$name") || { zle reset-prompt; return 0; }
-      BUFFER="$cmd"
+      # Put the alias name (not the expanded command) into the buffer and
+      # submit. zsh's normal alias-expansion runs on accept-line, so the
+      # behavior is identical to typing `<name><enter>` — including history:
+      # `up-arrow` recalls the alias, not the unrolled command.
+      BUFFER="$name"
       CURSOR=${#BUFFER}
       zle accept-line
       ;;
@@ -180,7 +179,10 @@ _alien_pick_cli() {
     "")
       cmd=$(command alien get "$name") || return 0
       print -P "%F{8}» $name%f"
-      print -s -- "$cmd"
+      # Record the alias name in history so ↑-arrow recalls "ll", not the
+      # underlying `ls -alh`. We can't get true alias expansion from a
+      # function call (we're not inside ZLE), so still eval the command.
+      print -s -- "$name"
       eval -- "$cmd"
       ;;
     tab)

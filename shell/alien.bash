@@ -67,13 +67,12 @@ a() {
 
 _alien_run_fzf() {
   command alien tab set all >/dev/null 2>&1
-  local _alien_header
-  _alien_header=$(command alien fzf-header --filter all)
 
   command alien fzf --filter all 2>/dev/null | fzf \
     --ansi \
     --delimiter=$'\t' \
     --with-nth=2 \
+    --header-lines=3 \
     --no-multi \
     --reverse \
     --height=50% \
@@ -81,7 +80,6 @@ _alien_run_fzf() {
     --pointer='›' \
     --marker='✓' \
     --prompt='👽 alien › ' \
-    --header="$_alien_header" \
     --color='border:bright-cyan,prompt:bright-cyan,pointer:bright-magenta,header:gray,info:gray,hl:bright-yellow,hl+:bright-yellow' \
     --expect='tab,ctrl-e,ctrl-d' \
     --bind '[:transform(alien tab prev)' \
@@ -103,10 +101,12 @@ _alien_fzf_widget() {
     "")
       # Enter: execute the alias's command directly. Bash doesn't have a
       # clean "accept this line" hook from inside `bind -x`, so we run the
-      # command here and add it to history for ↑-arrow recall.
+      # command here. Record the *alias name* in history (not the expanded
+      # command) so ↑-arrow behaves the way it would if you'd typed the
+      # alias yourself.
       cmd=$(command alien get "$name") || return 0
       printf '\n\033[2m» %s\033[0m\n' "$name"
-      history -s -- "$cmd"
+      history -s -- "$name"
       eval -- "$cmd"
       READLINE_LINE=
       READLINE_POINT=0
@@ -140,7 +140,7 @@ _alien_pick_cli() {
     "")
       cmd=$(command alien get "$name") || return 0
       printf '\033[2m» %s\033[0m\n' "$name"
-      history -s -- "$cmd"
+      history -s -- "$name"
       eval -- "$cmd"
       ;;
     tab)
