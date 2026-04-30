@@ -11,6 +11,9 @@
 prompt. Run a command, decide it's worth keeping, type `alien <name>`, and
 the alias is live in your current shell. No rc-file editing, no `exec zsh`.
 
+<video src="demo.mp4" controls muted loop width="100%">
+  <a href="demo.mp4">Watch the demo</a>
+</video>
 
 ---
 
