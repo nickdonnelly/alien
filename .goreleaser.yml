@@ -1,0 +1,67 @@
+version: 2
+
+# alien — released via Goreleaser on tag push (see .github/workflows/release.yml).
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: alien
+    main: .
+    binary: alien
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    name_template: "alien_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - shell/**/*
+      - packs/**/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+
+release:
+  name_template: "alien {{ .Version }}"
+  draft: false
+  prerelease: auto
+
+# Optional Homebrew tap. Uncomment and create the tap repo (e.g.
+# nickdonnelly/homebrew-tap-alien) before tagging a release.
+#
+brews:
+  - name: alien
+    repository:
+      owner: nickdonnelly
+      name: homebrew-tap-alien
+    description: "Quick command-line aliases. Run a command, like it, type alien <name>."
+    homepage: "https://gitlab.com/nickdonnelly/alien"
+    license: MIT
+    dependencies:
+      - name: fzf
+        type: optional
+    install: |
+      bin.install "alien"
