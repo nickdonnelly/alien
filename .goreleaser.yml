@@ -56,7 +56,7 @@ brews:
   - name: alien
     repository:
       owner: nickdonnelly
-      name: homebrew-alien-tap
+      name: homebrew-tap-alien
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     description: "Quick command-line aliases. Run a command, like it, type alien <name>."
