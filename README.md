@@ -2,7 +2,6 @@
 
 > Quick command-line aliases. Run a command, like it, type `alien <name>`, done.
 
-[![CI](https://github.com/nick-donnelly/alien/actions/workflows/ci.yml/badge.svg)](https://github.com/nick-donnelly/alien/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Shells](https://img.shields.io/badge/shells-zsh%20%7C%20bash-blueviolet)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
@@ -11,9 +10,9 @@
 prompt. Run a command, decide it's worth keeping, type `alien <name>`, and
 the alias is live in your current shell. No rc-file editing, no `exec zsh`.
 
-<video src="demo.mp4" controls muted loop width="100%">
-  <a href="demo.mp4">Watch the demo</a>
-</video>
+
+https://github.com/user-attachments/assets/3f9586c9-135e-4ed1-9df0-3468995ff495
+
 
 ---
 
