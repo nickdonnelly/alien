@@ -10,17 +10,6 @@
 prompt. Run a command, decide it's worth keeping, type `alien <name>`, and
 the alias is live in your current shell. No rc-file editing, no `exec zsh`.
 
-![demo](demo.gif)
-
-```sh
-$ ls -alh ~/.config | head -6
-…
-$ alien lc -m "list ~/.config"
-✓ aliased lc → ls -alh ~/.config | head -6
-
-$ lc
-…
-```
 
 ---
 
