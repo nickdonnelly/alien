@@ -1,0 +1,28 @@
+{
+  "ufo": {
+    "name": "docker",
+    "version": "1.0.0",
+    "description": "Common Docker and Compose shortcuts",
+    "author": "alien"
+  },
+  "aliases": {
+    "d":      { "command": "docker",                                  "comment": "docker" },
+    "dps":    { "command": "docker ps",                               "comment": "running containers" },
+    "dpsa":   { "command": "docker ps -a",                            "comment": "all containers" },
+    "di":     { "command": "docker images",                           "comment": "list images" },
+    "drmi":   { "command": "docker rmi",                              "comment": "remove image" },
+    "drm":    { "command": "docker rm",                               "comment": "remove container" },
+    "dlog":   { "command": "docker logs -f",                          "comment": "follow logs" },
+    "dexec":  { "command": "docker exec -it",                         "comment": "exec interactive shell" },
+    "dstop":  { "command": "docker stop",                             "comment": "stop container" },
+    "dstart": { "command": "docker start",                            "comment": "start container" },
+    "dprune": { "command": "docker system prune -f",                  "comment": "prune unused" },
+    "dvol":   { "command": "docker volume ls",                        "comment": "volumes" },
+    "dnet":   { "command": "docker network ls",                       "comment": "networks" },
+    "dcu":    { "command": "docker compose up -d",                    "comment": "compose up detached" },
+    "dcd":    { "command": "docker compose down",                     "comment": "compose down" },
+    "dcl":    { "command": "docker compose logs -f",                  "comment": "compose logs" },
+    "dcp":    { "command": "docker compose ps",                       "comment": "compose ps" },
+    "dcr":    { "command": "docker compose restart",                  "comment": "compose restart" }
+  }
+}

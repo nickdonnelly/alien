@@ -1,0 +1,23 @@
+{
+  "ufo": {
+    "name": "files",
+    "version": "1.0.0",
+    "description": "File listing and manipulation shortcuts",
+    "author": "alien"
+  },
+  "aliases": {
+    "ll":    { "command": "ls -alh",                                  "comment": "long listing, human sizes" },
+    "la":    { "command": "ls -A",                                    "comment": "include hidden, no . and .." },
+    "lt":    { "command": "ls -alht",                                 "comment": "long, sorted by mtime" },
+    "lsize": { "command": "ls -alhS",                                 "comment": "long, sorted by size" },
+    "tree2": { "command": "find . -maxdepth 2 -print",                "comment": "shallow tree" },
+    "rmrf":  { "command": "rm -rf",                                   "comment": "force-remove (use with care)" },
+    "cpv":   { "command": "cp -v",                                    "comment": "verbose copy" },
+    "mvv":   { "command": "mv -v",                                    "comment": "verbose move" },
+    "mkp":   { "command": "mkdir -p",                                 "comment": "mkdir with parents" },
+    "duh":   { "command": "du -sh",                                   "comment": "summary size, human" },
+    "duhh":  { "command": "du -h --max-depth=1",                      "comment": "size of children" },
+    "dfh":   { "command": "df -h",                                    "comment": "disk free, human" },
+    "fsz":   { "command": "find . -type f -size +100M -exec ls -lh {} +",  "comment": "files over 100MB" }
+  }
+}

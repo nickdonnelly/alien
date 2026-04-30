@@ -1,0 +1,18 @@
+{
+  "ufo": {
+    "name": "nav",
+    "version": "1.0.0",
+    "description": "Directory navigation shortcuts",
+    "author": "alien"
+  },
+  "aliases": {
+    "..":    { "command": "cd ..",                                    "comment": "up one" },
+    "...":   { "command": "cd ../..",                                 "comment": "up two" },
+    "....":  { "command": "cd ../../..",                              "comment": "up three" },
+    ".....": { "command": "cd ../../../..",                           "comment": "up four" },
+    "cdtmp": { "command": "cd $(mktemp -d)",                          "comment": "cd into a fresh temp dir" },
+    "cddl":  { "command": "cd ~/Downloads",                           "comment": "go to Downloads" },
+    "cdp":   { "command": "cd ~/projects",                            "comment": "go to projects" },
+    "cdc":   { "command": "cd ~/.config",                             "comment": "go to ~/.config" }
+  }
+}

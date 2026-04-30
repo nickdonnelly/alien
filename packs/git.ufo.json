@@ -1,0 +1,34 @@
+{
+  "ufo": {
+    "name": "git",
+    "version": "1.0.0",
+    "description": "Common git shortcuts",
+    "author": "alien"
+  },
+  "aliases": {
+    "g":     { "command": "git",                                                "comment": "git" },
+    "gst":   { "command": "git status",                                          "comment": "status" },
+    "gss":   { "command": "git status --short",                                  "comment": "short status" },
+    "ga":    { "command": "git add",                                             "comment": "add" },
+    "gaa":   { "command": "git add --all",                                       "comment": "add all" },
+    "gc":    { "command": "git commit",                                          "comment": "commit" },
+    "gcm":   { "command": "git commit -m",                                       "comment": "commit with message" },
+    "gca":   { "command": "git commit --amend",                                  "comment": "amend last commit" },
+    "gco":   { "command": "git checkout",                                        "comment": "checkout" },
+    "gcb":   { "command": "git checkout -b",                                     "comment": "create + switch branch" },
+    "gb":    { "command": "git branch",                                          "comment": "list branches" },
+    "gbd":   { "command": "git branch -d",                                       "comment": "delete branch" },
+    "gp":    { "command": "git push",                                            "comment": "push" },
+    "gpl":   { "command": "git pull",                                            "comment": "pull" },
+    "gf":    { "command": "git fetch",                                           "comment": "fetch" },
+    "gd":    { "command": "git diff",                                            "comment": "diff" },
+    "gds":   { "command": "git diff --staged",                                   "comment": "diff staged" },
+    "gl":    { "command": "git log --oneline -20",                               "comment": "compact log" },
+    "glg":   { "command": "git log --oneline --graph --all -20",                 "comment": "graph log" },
+    "gsta":  { "command": "git stash",                                           "comment": "stash" },
+    "gstp":  { "command": "git stash pop",                                       "comment": "stash pop" },
+    "gm":    { "command": "git merge",                                           "comment": "merge" },
+    "gr":    { "command": "git rebase",                                          "comment": "rebase" },
+    "gri":   { "command": "git rebase -i",                                       "comment": "interactive rebase" }
+  }
+}
