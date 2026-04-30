@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -46,6 +48,93 @@ func parseAliasLine(line string) (name, command string, ok bool) {
 	return name, val, true
 }
 
+// rcSearchPaths returns the list of rc files we'll grep for `alias <name>=`
+// to figure out where each shell-imported alias came from. The shell hook
+// passes its known list via the ALIEN_RC_FILES env var (colon-separated);
+// we fall back to a sensible default set if it's not provided.
+func rcSearchPaths() []string {
+	if v := os.Getenv("ALIEN_RC_FILES"); v != "" {
+		out := []string{}
+		for _, p := range strings.Split(v, ":") {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return nil
+	}
+	out := []string{}
+	for _, rel := range []string{
+		".zshrc", ".zshenv", ".zprofile", ".zlogin",
+		".bashrc", ".bash_profile", ".profile",
+		".aliases", ".bash_aliases", ".zsh_aliases",
+	} {
+		p := filepath.Join(home, rel)
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// originResolver maps each alias name to a human-readable origin label
+// (e.g. ".zshrc", "omz:git") by greping the cached rc file contents for
+// `alias <name>=` lines. It loads each file only once.
+type originResolver struct {
+	files []string
+	cache map[string][]byte
+}
+
+func newOriginResolver() *originResolver {
+	r := &originResolver{cache: map[string][]byte{}}
+	for _, p := range rcSearchPaths() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		r.files = append(r.files, p)
+		r.cache[p] = data
+	}
+	return r
+}
+
+func (r *originResolver) lookup(name string) string {
+	if r == nil || len(r.files) == 0 {
+		return ""
+	}
+	// Match `alias name=` allowing leading whitespace and either bare or
+	// quoted forms. We don't bother to track WHICH definition wins if a
+	// name appears in multiple files — we just take the first hit, which
+	// is good enough for "where can I edit this?".
+	pat := regexp.MustCompile(`(?m)^[\s]*alias[\s]+` + regexp.QuoteMeta(name) + `[\s]*=`)
+	for _, p := range r.files {
+		if pat.Match(r.cache[p]) {
+			return prettyOrigin(p)
+		}
+	}
+	return ""
+}
+
+// prettyOrigin returns a short label for an rc file path. Special-cased for
+// oh-my-zsh layout: `~/.oh-my-zsh/plugins/git/git.plugin.zsh` becomes
+// `omz:git`. Everything else is just the basename.
+func prettyOrigin(path string) string {
+	if i := strings.Index(path, "/.oh-my-zsh/plugins/"); i >= 0 {
+		rest := path[i+len("/.oh-my-zsh/plugins/"):]
+		if j := strings.Index(rest, "/"); j > 0 {
+			return "omz:" + rest[:j]
+		}
+		return "omz:" + rest
+	}
+	if strings.Contains(path, "/.oh-my-zsh/") {
+		return "omz"
+	}
+	return filepath.Base(path)
+}
+
 // cmdImportShell reads `alias` output on stdin and merges entries into the
 // store with Source="shell". It also prunes stale shell-sourced entries no
 // longer present in the input, so removing an alias from the rc and
@@ -79,6 +168,7 @@ func cmdImportShell(args []string) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
+	resolver := newOriginResolver()
 	seen := map[string]bool{}
 	var lineCount, imported, updated int
 
@@ -99,8 +189,9 @@ func cmdImportShell(args []string) {
 			continue
 		}
 
+		from := resolver.lookup(name)
 		now := time.Now()
-		if existing, ok := s.Aliases[name]; ok && existing.Command == cmd {
+		if existing, ok := s.Aliases[name]; ok && existing.Command == cmd && existing.From == from {
 			// Unchanged — keep CreatedAt, just refresh seen.
 			seen[name] = true
 			continue
@@ -109,6 +200,7 @@ func cmdImportShell(args []string) {
 			Command:   cmd,
 			Enabled:   true,
 			Source:    "shell",
+			From:      from,
 			CreatedAt: now,
 		}
 		if existing, ok := s.Aliases[name]; ok {

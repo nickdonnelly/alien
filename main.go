@@ -42,6 +42,10 @@ func main() {
 		cmdShow(args[1:])
 	case "fzf", "fzf-list":
 		cmdFzfList(args[1:])
+	case "fzf-header":
+		cmdFzfHeader(args[1:])
+	case "tab", "tabs":
+		cmdTab(args[1:])
 	case "get":
 		cmdGet(args[1:])
 	case "export":

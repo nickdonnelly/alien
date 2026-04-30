@@ -26,6 +26,13 @@ type Alias struct {
 	// removed cleanly by `alien ufo uninstall <name>`.
 	Source string `json:"source,omitempty"`
 
+	// From is a human-readable origin label used in the picker's "FROM"
+	// column. For shell-imported entries this is the rc file or oh-my-zsh
+	// plugin where we found the `alias <name>=` definition (e.g. ".zshrc"
+	// or "omz:git"). For pack entries it stays empty — the badge already
+	// shows the pack name. For user entries it stays empty.
+	From string `json:"from,omitempty"`
+
 	Tags []string `json:"tags,omitempty"`
 }
 

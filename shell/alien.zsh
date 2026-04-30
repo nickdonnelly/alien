@@ -20,8 +20,28 @@
 # We pipe `alias` (the shell builtin) into the binary, which merges them into
 # the store with Source=shell so the picker can search them too. Stale rc
 # entries get pruned automatically.
+#
+# We also tell the binary which files to grep for `alias name=` lines so it
+# can fill the FROM column with a useful origin label (".zshrc", "omz:git",
+# etc.) instead of a generic "shell".
 if command -v alien >/dev/null 2>&1; then
-  alias 2>/dev/null | command alien import-shell --quiet
+  local _alien_rc=()
+  local _f
+  for _f in ~/.zshrc ~/.zshenv ~/.zprofile ~/.zlogin ~/.profile \
+           ~/.aliases ~/.zsh_aliases; do
+    [[ -r $_f ]] && _alien_rc+=$_f
+  done
+  if [[ -d ~/.oh-my-zsh ]]; then
+    for _f in ~/.oh-my-zsh/lib/*.zsh(N) \
+             ~/.oh-my-zsh/plugins/*/*.plugin.zsh(N) \
+             ~/.oh-my-zsh/custom/*.zsh(N) \
+             ~/.oh-my-zsh/custom/plugins/*/*.plugin.zsh(N); do
+      _alien_rc+=$_f
+    done
+  fi
+  ALIEN_RC_FILES="${(j.:.)_alien_rc}" alias 2>/dev/null | \
+    ALIEN_RC_FILES="${(j.:.)_alien_rc}" command alien import-shell --quiet
+  unset _alien_rc _f
   # Optional auto-pull (no-op unless enabled and throttle elapsed).
   command alien sync maybe-pull 2>/dev/null
 fi
@@ -69,20 +89,31 @@ a() {
 #   d     -> open `alien delete <name>`
 
 _alien_run_fzf() {
-  command alien fzf 2>/dev/null | fzf \
+  # Reset the active tab so each picker invocation starts on "all". Users
+  # who hit `[` / `]` mid-session can move; we don't want stale state from
+  # a previous picker session to silently filter the next one.
+  command alien tab set all >/dev/null 2>&1
+
+  local _alien_tab="all"
+  local _alien_header
+  _alien_header=$(command alien fzf-header --filter "$_alien_tab")
+
+  command alien fzf --filter "$_alien_tab" 2>/dev/null | fzf \
     --ansi \
     --delimiter=$'\t' \
     --with-nth=2 \
     --no-multi \
     --reverse \
-    --height=40% \
+    --height=50% \
     --info=inline \
     --pointer='›' \
     --marker='✓' \
     --prompt='👽 alien › ' \
-    --header='enter:run · tab:insert · ctrl-e:edit · ctrl-d:delete · esc:cancel' \
+    --header="$_alien_header" \
     --color='border:bright-cyan,prompt:bright-cyan,pointer:bright-magenta,header:gray,info:gray,hl:bright-yellow,hl+:bright-yellow' \
     --expect='tab,ctrl-e,ctrl-d' \
+    --bind '[:transform(alien tab prev)' \
+    --bind ']:transform(alien tab next)' \
     ${=ALIEN_FZF_OPTS}
 }
 

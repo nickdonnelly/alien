@@ -24,20 +24,34 @@ func validAliasName(name string) bool {
 	return nameRe.MatchString(name)
 }
 
-// sourceBadge formats a short, colored tag like `[shell]` or `from 🛸 docker`.
-// Returns "" for user-managed entries so the picker stays clean by default.
-func sourceBadge(src string) string {
+// sourceCell formats the right-most "FROM" column based on a stored alias's
+// Source and From fields. The column is intentionally compact — just enough
+// to tell the user what sets this entry apart from a hand-typed one.
+//
+//	user        ""                       -> ""
+//	shell       From=".zshrc"            -> ".zshrc"
+//	shell       From="omz:git"           -> "omz:git"
+//	shell       From=""                  -> "shell"
+//	pack:docker (any)                    -> "🛸 docker"
+func sourceCell(src, from string) string {
 	switch {
 	case src == "":
 		return ""
 	case src == "shell":
-		return gray("[shell]")
+		if from == "" {
+			return gray("shell")
+		}
+		return gray(from)
 	case strings.HasPrefix(src, "pack:"):
-		return cyan("from 🛸 " + strings.TrimPrefix(src, "pack:"))
+		return cyan("🛸 " + strings.TrimPrefix(src, "pack:"))
 	default:
-		return dim("[" + src + "]")
+		return dim(src)
 	}
 }
+
+// sourceBadge wraps sourceCell for callers that don't have the From field
+// handy (like guardManaged's diagnostics). Falls back to source-only.
+func sourceBadge(src string) string { return sourceCell(src, "") }
 
 // guardManaged blocks destructive operations on aliases whose owner is not
 // the user. Shell-imported entries live in the user's rc; alien refuses to
@@ -266,37 +280,61 @@ func cmdShow(args []string) {
 	}
 	fmt.Printf("  %s %s\n", gray("status  :"), status)
 	fmt.Printf("  %s %s\n", gray("source  :"), src)
+	if a.From != "" {
+		fmt.Printf("  %s %s\n", gray("from    :"), a.From)
+	}
 	fmt.Printf("  %s %s\n", gray("created :"), a.CreatedAt.Local().Format("2006-01-02 15:04"))
 	fmt.Println()
 }
 
 // ---------- fzf format ----------
 
+// matchesTab returns whether an alias belongs in the named "tab" view.
+// Tabs the picker can show:
+//   - "" / "all":      everything
+//   - "user":          Source == ""
+//   - "shell":         Source == "shell"
+//   - "pack:<name>":   that exact pack
+func matchesTab(a Alias, tab string) bool {
+	switch tab {
+	case "", "all":
+		return true
+	case "user":
+		return a.Source == ""
+	case "shell":
+		return a.Source == "shell"
+	default:
+		if strings.HasPrefix(tab, "pack:") {
+			return a.Source == tab
+		}
+		return true
+	}
+}
+
 // cmdFzfList prints one line per alias in a tab-delimited form designed for
 // the shell's fzf widget. The first column (alias name, no ANSI) is what the
 // shell extracts; the second column is a pre-colored display string.
 //
 //	NAME\tDISPLAY
+//
+// Accepts --filter <tab> to scope to one of the tabs above.
 func cmdFzfList(args []string) {
+	_, filter := extractFlag(args, "--filter")
+
 	s, err := loadStore()
 	if err != nil {
 		errorf("%v", err)
 		os.Exit(1)
 	}
-	names := s.sortedNames()
-	maxName := 0
-	maxCmd := 0
-	for _, n := range names {
-		if len(n) > maxName {
-			maxName = len(n)
-		}
-		if l := len(s.Aliases[n].Command); l > maxCmd {
-			maxCmd = l
+	all := s.sortedNames()
+	names := make([]string, 0, len(all))
+	for _, n := range all {
+		if matchesTab(s.Aliases[n], filter) {
+			names = append(names, n)
 		}
 	}
-	if maxCmd > 50 {
-		maxCmd = 50
-	}
+
+	maxName, maxCmd, maxFrom := columnWidths(s, names)
 	for _, n := range names {
 		a := s.Aliases[n]
 		dot := green("●")
@@ -307,23 +345,141 @@ func cmdFzfList(args []string) {
 			nameCol = dim(padRight(n, maxName))
 			cmdCol = dim(cmdCol)
 		}
-		// Compose the trailing "tags + comment" cell. Badges are searchable
-		// in fzf as plain words — typing "shell" filters to shell entries,
-		// typing the pack name (e.g. "docker") filters to that pack — so
-		// users get scoped filtering for free just by typing the badge text.
-		var trailing []string
-		if b := sourceBadge(a.Source); b != "" {
-			trailing = append(trailing, b)
-		}
+		fromCol := sourceCell(a.Source, a.From)
+		fromCol = padRightVisible(fromCol, maxFrom)
+		comment := ""
 		if c := strings.TrimSpace(a.Comment); c != "" {
-			trailing = append(trailing, gray("# "+c))
+			comment = "  " + gray("# "+c)
 		}
-		display := fmt.Sprintf("%s %s  %s", dot, nameCol, cmdCol)
-		if len(trailing) > 0 {
-			display += "  " + strings.Join(trailing, "  ")
-		}
+		display := fmt.Sprintf("%s %s  %s  %s%s", dot, nameCol, cmdCol, fromCol, comment)
 		// First field is the raw name (no ANSI) — shell uses it for selection.
 		fmt.Printf("%s\t%s\n", n, display)
+	}
+}
+
+func columnWidths(s *Store, names []string) (nameW, cmdW, fromW int) {
+	for _, n := range names {
+		if len(n) > nameW {
+			nameW = len(n)
+		}
+		a := s.Aliases[n]
+		if l := len(a.Command); l > cmdW {
+			cmdW = l
+		}
+		if l := visibleLen(sourceCell(a.Source, a.From)); l > fromW {
+			fromW = l
+		}
+	}
+	if cmdW > 50 {
+		cmdW = 50
+	}
+	if nameW < 4 {
+		nameW = 4 // matches "NAME" width
+	}
+	return
+}
+
+// visibleLen returns the rendered length of s, ignoring ANSI escape sequences.
+// Good enough for column padding; doesn't handle wide CJK glyphs.
+func visibleLen(s string) int {
+	n, inEsc := 0, false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if r == 'm' || r == 'K' {
+				inEsc = false
+			}
+		case r == 0x1b:
+			inEsc = true
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// padRightVisible pads s to width w using its visible length (skipping ANSI).
+func padRightVisible(s string, w int) string {
+	gap := w - visibleLen(s)
+	if gap <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", gap)
+}
+
+// cmdFzfHeader emits the multi-line header text shown above the picker:
+// column labels, then a tab strip with the current tab marked, then key
+// hints. The shell wires this to fzf's --header (initial render) and to
+// `change-header(...)` actions on bracket presses.
+func cmdFzfHeader(args []string) {
+	_, filter := extractFlag(args, "--filter")
+	s, _ := loadStore()
+	fmt.Print(buildPickerHeader(s, filter))
+}
+
+// buildPickerHeader composes the three header lines.
+func buildPickerHeader(s *Store, currentTab string) string {
+	if currentTab == "" {
+		currentTab = "all"
+	}
+	// Column labels — fixed widths so the header is stable across reloads.
+	cols := dim(fmt.Sprintf("  %-12s  %-50s  %s", "ALIAS", "COMMAND", "FROM"))
+
+	// Tab strip.
+	tabs := availableTabs(s)
+	parts := make([]string, 0, len(tabs))
+	for _, t := range tabs {
+		label := tabLabel(t)
+		if t == currentTab {
+			parts = append(parts, brcyan("❯ "+label))
+		} else {
+			parts = append(parts, gray(label))
+		}
+	}
+	tabLine := "  " + strings.Join(parts, "  ")
+
+	hints := dim("  enter:run · tab:insert · ctrl-e:edit · ctrl-d:delete · [/]:tabs · esc:cancel")
+	return cols + "\n" + tabLine + "\n" + hints
+}
+
+// availableTabs lists the tabs the user can cycle through, in display order.
+// "all" always first; pack tabs sorted alphabetically after the fixed ones.
+func availableTabs(s *Store) []string {
+	out := []string{"all", "user", "shell"}
+	if s == nil {
+		return out
+	}
+	packs := make([]string, 0, len(s.Packs))
+	for n := range s.Packs {
+		packs = append(packs, n)
+	}
+	sortStrings(packs)
+	for _, n := range packs {
+		out = append(out, "pack:"+n)
+	}
+	return out
+}
+
+// sortStrings is a tiny stdlib indirection so commands.go doesn't need to
+// import "sort" just for this; reuse the existing sort import if present.
+func sortStrings(ss []string) {
+	// Insertion sort — n is at most a few dozen pack names.
+	for i := 1; i < len(ss); i++ {
+		for j := i; j > 0 && ss[j-1] > ss[j]; j-- {
+			ss[j-1], ss[j] = ss[j], ss[j-1]
+		}
+	}
+}
+
+func tabLabel(t string) string {
+	switch t {
+	case "all", "user", "shell":
+		return t
+	default:
+		if strings.HasPrefix(t, "pack:") {
+			return "🛸 " + strings.TrimPrefix(t, "pack:")
+		}
+		return t
 	}
 }
 

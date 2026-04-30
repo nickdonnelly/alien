@@ -22,8 +22,16 @@
 
 # Index aliases already defined in rc files and plugins so the picker can
 # search them too. Pipe `alias` to the binary which merges as Source=shell.
+# Pass our rc file list so the binary can fill the FROM column with a real
+# origin label (".bashrc", ".bash_aliases", ...) instead of a generic "shell".
 if command -v alien >/dev/null 2>&1; then
-  alias 2>/dev/null | command alien import-shell --quiet
+  _alien_rc=""
+  for _f in ~/.bashrc ~/.bash_profile ~/.profile ~/.aliases ~/.bash_aliases; do
+    [[ -r $_f ]] && _alien_rc+="$_f:"
+  done
+  ALIEN_RC_FILES="${_alien_rc%:}" alias 2>/dev/null | \
+    ALIEN_RC_FILES="${_alien_rc%:}" command alien import-shell --quiet
+  unset _alien_rc _f
   command alien sync maybe-pull 2>/dev/null
 fi
 
@@ -58,20 +66,26 @@ a() {
 # ---------------- fuzzy picker -----------------------------------------
 
 _alien_run_fzf() {
-  command alien fzf 2>/dev/null | fzf \
+  command alien tab set all >/dev/null 2>&1
+  local _alien_header
+  _alien_header=$(command alien fzf-header --filter all)
+
+  command alien fzf --filter all 2>/dev/null | fzf \
     --ansi \
     --delimiter=$'\t' \
     --with-nth=2 \
     --no-multi \
     --reverse \
-    --height=40% \
+    --height=50% \
     --info=inline \
     --pointer='›' \
     --marker='✓' \
     --prompt='👽 alien › ' \
-    --header='enter:run · tab:insert · ctrl-e:edit · ctrl-d:delete · esc:cancel' \
+    --header="$_alien_header" \
     --color='border:bright-cyan,prompt:bright-cyan,pointer:bright-magenta,header:gray,info:gray,hl:bright-yellow,hl+:bright-yellow' \
     --expect='tab,ctrl-e,ctrl-d' \
+    --bind '[:transform(alien tab prev)' \
+    --bind ']:transform(alien tab next)' \
     $ALIEN_FZF_OPTS
 }
 
