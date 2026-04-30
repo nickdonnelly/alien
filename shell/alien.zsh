@@ -127,9 +127,11 @@ _alien_fzf_widget() {
 }
 zle -N _alien_fzf_widget
 
-# Non-ZLE picker, used by `a` with no args. Same behavior, but we can't write
-# into the prompt buffer from here, so for the "tab" case we just print the
-# alias name. For "enter" we run the command directly in the current shell.
+# Non-ZLE picker, used by `a` with no args. We're not inside a ZLE widget
+# here, so we can't manipulate $BUFFER directly — but `print -z` pushes text
+# onto the editor buffer stack, which becomes prefilled at the *next* prompt.
+# That gives "tab" the same prefill behavior as the Ctrl-G widget, just
+# delayed by one redraw.
 _alien_pick_cli() {
   emulate -L zsh
   if ! command -v fzf >/dev/null 2>&1; then
@@ -151,7 +153,9 @@ _alien_pick_cli() {
       eval -- "$cmd"
       ;;
     tab)
-      print -- "$name"
+      # Prefill the next prompt with the alias name + a trailing space so
+      # the user can keep typing args before hitting enter.
+      print -z -- "$name "
       ;;
     ctrl-e)
       command alien edit "$name"
