@@ -13,7 +13,7 @@
 
 # --- config (override before sourcing) ----------------------------------
 : "${ALIEN_HOME:=${XDG_CONFIG_HOME:-$HOME/.config}/alien}"
-: "${ALIEN_KEYBIND:=\C-g}"          # Ctrl-G; set to "" to skip binding
+: "${ALIEN_KEYBIND:=\C-g}" # Ctrl-G; set to "" to skip binding
 : "${ALIEN_FZF_OPTS:=}"
 
 # Source active aliases on startup. The Go binary regenerates this file after
@@ -29,7 +29,7 @@ if command -v alien >/dev/null 2>&1; then
   for _f in ~/.bashrc ~/.bash_profile ~/.profile ~/.aliases ~/.bash_aliases; do
     [[ -r $_f ]] && _alien_rc+="$_f:"
   done
-  ALIEN_RC_FILES="${_alien_rc%:}" alias 2>/dev/null | \
+  ALIEN_RC_FILES="${_alien_rc%:}" alias 2>/dev/null |
     ALIEN_RC_FILES="${_alien_rc%:}" command alien import-shell --quiet
   unset _alien_rc _f
   command alien sync maybe-pull 2>/dev/null
@@ -38,15 +38,23 @@ fi
 # `alien` wrapper: capture previous command and pass it via --prev-cmd, then
 # re-source aliases so changes take effect immediately.
 alien() {
-  if (( $# == 0 )); then
+  if (($# == 0)); then
     command alien
     return
   fi
   # `chain` needs more than the previous line — pipe a window of recent
   # history (oldest first) into the binary so the TUI can pick from it.
   if [[ "$1" == "chain" ]]; then
-    HISTTIMEFORMAT='' fc -ln -50 2>/dev/null | command alien "$@"
-    local rc=$?
+    local rc=0
+    # Both atuin and fc emit oldest-first; the binary reverses internally
+    # to display newest-at-top. Just pipe raw.
+    if command -v atuin >/dev/null 2>&1; then
+      atuin history list --cmd-only --session 2>/dev/null |
+        tail -200 | command alien "$@"
+    else
+      HISTTIMEFORMAT='' fc -ln -50 2>/dev/null | command alien "$@"
+    fi
+    rc=$?
     [[ -r "$ALIEN_HOME/aliases.sh" ]] && source "$ALIEN_HOME/aliases.sh"
     return $rc
   fi
@@ -64,7 +72,7 @@ alien() {
 
 # `a` shortcut: bare invocation opens the picker; otherwise delegates.
 a() {
-  if (( $# == 0 )); then
+  if (($# == 0)); then
     _alien_pick_cli
   else
     alien "$@"
@@ -106,29 +114,29 @@ _alien_fzf_widget() {
   [[ -z "$name" ]] && return 0
 
   case "$key" in
-    "")
-      # Enter: execute the alias's command directly. Bash doesn't have a
-      # clean "accept this line" hook from inside `bind -x`, so we run the
-      # command here. Record the *alias name* in history (not the expanded
-      # command) so ↑-arrow behaves the way it would if you'd typed the
-      # alias yourself.
-      cmd=$(command alien get "$name") || return 0
-      printf '\n\033[2m» %s\033[0m\n' "$name"
-      history -s -- "$name"
-      eval -- "$cmd"
-      READLINE_LINE=
-      READLINE_POINT=0
-      ;;
-    tab)
-      READLINE_LINE+="$name "
-      READLINE_POINT=${#READLINE_LINE}
-      ;;
-    ctrl-e)
-      command alien edit "$name"
-      ;;
-    ctrl-d)
-      command alien delete "$name"
-      ;;
+  "")
+    # Enter: execute the alias's command directly. Bash doesn't have a
+    # clean "accept this line" hook from inside `bind -x`, so we run the
+    # command here. Record the *alias name* in history (not the expanded
+    # command) so ↑-arrow behaves the way it would if you'd typed the
+    # alias yourself.
+    cmd=$(command alien get "$name") || return 0
+    printf '\n\033[2m» %s\033[0m\n' "$name"
+    history -s -- "$name"
+    eval -- "$cmd"
+    READLINE_LINE=
+    READLINE_POINT=0
+    ;;
+  tab)
+    READLINE_LINE+="$name "
+    READLINE_POINT=${#READLINE_LINE}
+    ;;
+  ctrl-e)
+    command alien edit "$name"
+    ;;
+  ctrl-d)
+    command alien delete "$name"
+    ;;
   esac
 }
 
@@ -145,21 +153,21 @@ _alien_pick_cli() {
   name=${line%%$'\t'*}
   [[ -z "$name" ]] && return 0
   case "$key" in
-    "")
-      cmd=$(command alien get "$name") || return 0
-      printf '\033[2m» %s\033[0m\n' "$name"
-      history -s -- "$name"
-      eval -- "$cmd"
-      ;;
-    tab)
-      printf '%s\n' "$name"
-      ;;
-    ctrl-e)
-      command alien edit "$name"
-      ;;
-    ctrl-d)
-      command alien delete "$name"
-      ;;
+  "")
+    cmd=$(command alien get "$name") || return 0
+    printf '\033[2m» %s\033[0m\n' "$name"
+    history -s -- "$name"
+    eval -- "$cmd"
+    ;;
+  tab)
+    printf '%s\n' "$name"
+    ;;
+  ctrl-e)
+    command alien edit "$name"
+    ;;
+  ctrl-d)
+    command alien delete "$name"
+    ;;
   esac
 }
 

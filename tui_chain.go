@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -78,9 +79,9 @@ func cmdChain(args []string) {
 }
 
 // readHistoryLines pulls recent commands from stdin (preferred — the shell
-// wrapper pipes `fc -ln` output) and falls back to parsing $HISTFILE so the
-// command still works when run outside the wrapper. Returns lines newest-first
-// with consecutive duplicates and `alien chain ...` self-references stripped.
+// wrapper pipes raw history output) or falls back to atuin / $HISTFILE.
+// Contract: every source returns oldest-first (atuin's default, fc's default,
+// histfile order). We reverse once here so callers see newest-first.
 func readHistoryLines() []string {
 	var raw []string
 	if !isStdinTTY() {
@@ -89,13 +90,15 @@ func readHistoryLines() []string {
 		for sc.Scan() {
 			raw = append(raw, sc.Text())
 		}
-		// fc / history print oldest-first; flip so the TUI shows newest at top.
-		for i, j := 0, len(raw)-1; i < j; i, j = i+1, j-1 {
-			raw[i], raw[j] = raw[j], raw[i]
-		}
+	}
+	if len(raw) == 0 {
+		raw = readAtuin()
 	}
 	if len(raw) == 0 {
 		raw = readHistFile()
+	}
+	for i, j := 0, len(raw)-1; i < j; i, j = i+1, j-1 {
+		raw[i], raw[j] = raw[j], raw[i]
 	}
 	return cleanHistory(raw)
 }
@@ -106,6 +109,30 @@ func isStdinTTY() bool {
 		return true
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// readAtuin shells out to atuin if it's installed. Used when alien chain is
+// invoked outside the shell wrapper (e.g. directly from a TTY), so atuin
+// users still get their real history. Returns newest-first.
+func readAtuin() []string {
+	if _, err := exec.LookPath("atuin"); err != nil {
+		return nil
+	}
+	out, err := exec.Command("atuin", "history", "list",
+		"--cmd-only", "--session").Output()
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if s := strings.TrimSpace(l); s != "" {
+			lines = append(lines, s)
+		}
+		if len(lines) >= 200 {
+			break
+		}
+	}
+	return lines
 }
 
 func readHistFile() []string {
@@ -131,17 +158,12 @@ func readHistFile() []string {
 		for sc.Scan() {
 			lines = append(lines, parseHistLine(sc.Text()))
 		}
-		// Files are oldest-first; the wrapper pipe gives newest-first. Normalize
-		// to newest-first so the TUI presentation is consistent.
-		out := make([]string, 0, len(lines))
-		for i := len(lines) - 1; i >= 0; i-- {
-			out = append(out, lines[i])
+		// Cap to the most recent 200 lines (file tail) but keep them in
+		// natural file order (oldest-first) — readHistoryLines reverses.
+		if len(lines) > 200 {
+			lines = lines[len(lines)-200:]
 		}
-		// Cap so we don't load 50k lines into a TUI.
-		if len(out) > 200 {
-			out = out[:200]
-		}
-		return out
+		return lines
 	}
 	return nil
 }
@@ -221,21 +243,21 @@ func runChainTUI(history []string) ([]string, error) {
 	return mm.chainCommands(), nil
 }
 
-// chainCommands returns the picked items in chronological (oldest-first)
-// order, which is the natural execution order for a chained alias.
+// chainCommands returns the picked items in pick order — i.e. the user
+// controls the chain order by selecting items in the order they want them
+// to run. Re-toggling an item moves it to the end of the chain.
 func (m *chainModel) chainCommands() []string {
 	type sel struct {
-		idx int
+		seq int
 		cmd string
 	}
 	var sels []sel
 	for _, it := range m.items {
 		if it.pickedAt >= 0 {
-			sels = append(sels, sel{it.histIdx, it.cmd})
+			sels = append(sels, sel{it.pickedAt, it.cmd})
 		}
 	}
-	// histIdx=0 is newest; we want oldest first, so sort descending.
-	sort.Slice(sels, func(i, j int) bool { return sels[i].idx > sels[j].idx })
+	sort.Slice(sels, func(i, j int) bool { return sels[i].seq < sels[j].seq })
 	out := make([]string, len(sels))
 	for i, s := range sels {
 		out[i] = s.cmd
@@ -335,9 +357,8 @@ func (m *chainModel) renderList(w, h int) string {
 		it := m.items[i]
 		mark := "[ ]"
 		if it.pickedAt >= 0 {
-			// Show chronological position so users see the resulting order.
-			pos := m.chronoPosition(i)
-			mark = tStyleOK.Render(fmt.Sprintf("[%d]", pos))
+			// Show position in the resulting chain (1-based by pick order).
+			mark = tStyleOK.Render(fmt.Sprintf("[%d]", m.pickPosition(i)))
 		}
 		cmd := truncate(it.cmd, w-8)
 		row := fmt.Sprintf("%s %s", mark, cmd)
@@ -351,13 +372,13 @@ func (m *chainModel) renderList(w, h int) string {
 	return b.String()
 }
 
-// chronoPosition returns the 1-based position the item at index i will occupy
-// in the final chained command (oldest-first among selected items).
-func (m *chainModel) chronoPosition(i int) int {
-	target := m.items[i].histIdx
+// pickPosition returns the 1-based position the item at index i will occupy
+// in the final chained command, derived from pick order.
+func (m *chainModel) pickPosition(i int) int {
+	target := m.items[i].pickedAt
 	pos := 1
 	for _, it := range m.items {
-		if it.pickedAt >= 0 && it.histIdx > target {
+		if it.pickedAt >= 0 && it.pickedAt < target {
 			pos++
 		}
 	}

@@ -59,7 +59,14 @@ alien() {
   # history (newest first) into the binary so the TUI can pick from it.
   if [[ "$1" == "chain" ]]; then
     local rc=0
-    fc -ln -50 2>/dev/null | command alien "$@"
+    # Both atuin and fc emit oldest-first; the binary reverses internally
+    # to display newest-at-top. Just pipe raw.
+    if command -v atuin >/dev/null 2>&1; then
+      atuin history list --cmd-only --session 2>/dev/null \
+        | tail -200 | command alien "$@"
+    else
+      fc -ln -50 2>/dev/null | command alien "$@"
+    fi
     rc=$?
     [[ -r "$ALIEN_HOME/aliases.sh" ]] && source "$ALIEN_HOME/aliases.sh"
     return $rc
