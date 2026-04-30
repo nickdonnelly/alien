@@ -452,9 +452,12 @@ func cmdUfoInstall(args []string) {
 		}
 	}
 
-	installed, skipped, renamed := applyInstall(s, p, origin, decisions)
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
+	var installed, skipped, renamed int
+	if err := updateStore(func(s *Store) error {
+		installed, skipped, renamed = applyInstall(s, p, origin, decisions)
+		return nil
+	}); err != nil {
+		errorf("%v", err)
 		os.Exit(1)
 	}
 	successf("installed pack %s — %d added, %d renamed, %d skipped",
@@ -467,18 +470,16 @@ func cmdUfoUninstall(args []string) {
 		os.Exit(1)
 	}
 	name := args[0]
-	s, err := loadStore()
-	if err != nil {
+	var removed, kept int
+	if err := updateStore(func(s *Store) error {
+		if _, ok := s.Packs[name]; !ok {
+			errorf("pack %s is not installed", bold(name))
+			os.Exit(1)
+		}
+		removed, kept = applyUninstall(s, name)
+		return nil
+	}); err != nil {
 		errorf("%v", err)
-		os.Exit(1)
-	}
-	if _, ok := s.Packs[name]; !ok {
-		errorf("pack %s is not installed", bold(name))
-		os.Exit(1)
-	}
-	removed, kept := applyUninstall(s, name)
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
 		os.Exit(1)
 	}
 	successf("uninstalled %s — %d aliases removed, %d kept (you'd modified them)",

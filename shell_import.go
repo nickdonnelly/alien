@@ -159,19 +159,19 @@ func cmdImportShell(args []string) {
 		return
 	}
 
-	s, err := loadStore()
-	if err != nil {
-		errorf("%v", err)
-		os.Exit(1)
+	// First pass: parse stdin into a map of name → (command, from). Doing
+	// this outside the lock keeps the lock window short — scanning can be
+	// arbitrarily slow if stdin stalls.
+	type pending struct {
+		command string
+		from    string
 	}
+	parsed := map[string]pending{}
+	resolver := newOriginResolver()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-
-	resolver := newOriginResolver()
-	seen := map[string]bool{}
-	var lineCount, imported, updated int
-
+	lineCount := 0
 	for scanner.Scan() {
 		lineCount++
 		name, cmd, ok := parseAliasLine(scanner.Text())
@@ -182,59 +182,60 @@ func cmdImportShell(args []string) {
 		if name == "alien" || name == "a" {
 			continue
 		}
-		// Don't override aliases the user (or a pack) owns. They may have
-		// `promoted` this name to take ownership of the rc-defined entry.
-		if existing, ok := s.Aliases[name]; ok && existing.Source != "shell" {
-			seen[name] = true // keep them in the store as-is
-			continue
-		}
-
-		from := resolver.lookup(name)
-		now := time.Now()
-		if existing, ok := s.Aliases[name]; ok && existing.Command == cmd && existing.From == from {
-			// Unchanged — keep CreatedAt, just refresh seen.
-			seen[name] = true
-			continue
-		}
-		entry := Alias{
-			Command:   cmd,
-			Enabled:   true,
-			Source:    "shell",
-			From:      from,
-			CreatedAt: now,
-		}
-		if existing, ok := s.Aliases[name]; ok {
-			entry.CreatedAt = existing.CreatedAt
-			entry.UpdatedAt = now
-			entry.Comment = existing.Comment
-			updated++
-		} else {
-			imported++
-		}
-		s.Aliases[name] = entry
-		seen[name] = true
+		parsed[name] = pending{command: cmd, from: resolver.lookup(name)}
 	}
 	if err := scanner.Err(); err != nil {
 		errorf("read stdin: %v", err)
 		os.Exit(1)
 	}
 
-	// Prune shell-source entries no longer present in the rc.
-	var pruned int
-	if lineCount > 0 {
-		for name, a := range s.Aliases {
-			if a.Source != "shell" {
+	var imported, updated, pruned int
+	if err := updateStore(func(s *Store) error {
+		seen := map[string]bool{}
+		now := time.Now()
+		for name, p := range parsed {
+			// Don't override aliases the user (or a pack) owns. They may
+			// have `promoted` this name to take ownership of the rc entry.
+			if existing, ok := s.Aliases[name]; ok && existing.Source != "shell" {
+				seen[name] = true
 				continue
 			}
-			if !seen[name] {
-				delete(s.Aliases, name)
-				pruned++
+			if existing, ok := s.Aliases[name]; ok && existing.Command == p.command && existing.From == p.from {
+				seen[name] = true
+				continue
+			}
+			entry := Alias{
+				Command:   p.command,
+				Enabled:   true,
+				Source:    "shell",
+				From:      p.from,
+				CreatedAt: now,
+			}
+			if existing, ok := s.Aliases[name]; ok {
+				entry.CreatedAt = existing.CreatedAt
+				entry.UpdatedAt = now
+				entry.Comment = existing.Comment
+				updated++
+			} else {
+				imported++
+			}
+			s.Aliases[name] = entry
+			seen[name] = true
+		}
+		if lineCount > 0 {
+			for name, a := range s.Aliases {
+				if a.Source != "shell" {
+					continue
+				}
+				if !seen[name] {
+					delete(s.Aliases, name)
+					pruned++
+				}
 			}
 		}
-	}
-
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
+		return nil
+	}); err != nil {
+		errorf("%v", err)
 		os.Exit(1)
 	}
 	if !quiet && (imported > 0 || updated > 0 || pruned > 0) {
@@ -251,25 +252,22 @@ func cmdPromote(args []string) {
 		os.Exit(1)
 	}
 	name := args[0]
-	s, err := loadStore()
-	if err != nil {
+	if err := updateStore(func(s *Store) error {
+		a, ok := s.Aliases[name]
+		if !ok {
+			errorf("no alias named %s", bold(name))
+			os.Exit(1)
+		}
+		if a.Source != "shell" {
+			errorf("%s is already user-managed", bold(name))
+			os.Exit(1)
+		}
+		a.Source = ""
+		a.UpdatedAt = time.Now()
+		s.Aliases[name] = a
+		return nil
+	}); err != nil {
 		errorf("%v", err)
-		os.Exit(1)
-	}
-	a, ok := s.Aliases[name]
-	if !ok {
-		errorf("no alias named %s", bold(name))
-		os.Exit(1)
-	}
-	if a.Source != "shell" {
-		errorf("%s is already user-managed", bold(name))
-		os.Exit(1)
-	}
-	a.Source = ""
-	a.UpdatedAt = time.Now()
-	s.Aliases[name] = a
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
 		os.Exit(1)
 	}
 	successf("promoted %s — now user-managed", bold(brcyan(name)))

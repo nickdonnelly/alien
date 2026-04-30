@@ -1,7 +1,7 @@
 PREFIX ?= /usr/local
 BIN    ?= $(PREFIX)/bin
 
-.PHONY: all build install uninstall clean test fmt
+.PHONY: all build install uninstall clean test fmt skill
 
 all: build
 
@@ -23,3 +23,7 @@ fmt:
 
 test:
 	go test ./...
+
+# Install the Claude Code skill so AI agents can discover and use alien.
+skill: build
+	./alien skill install
