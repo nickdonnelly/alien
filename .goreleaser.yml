@@ -56,7 +56,9 @@ brews:
   - name: alien
     repository:
       owner: nickdonnelly
-      name: homebrew-tap-alien
+      name: homebrew-alien-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     description: "Quick command-line aliases. Run a command, like it, type alien <name>."
     homepage: "https://gitlab.com/nickdonnelly/alien"
     license: MIT
