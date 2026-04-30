@@ -55,6 +55,15 @@ alien() {
     command alien
     return
   fi
+  # `chain` needs more than the previous line — pipe a window of recent
+  # history (newest first) into the binary so the TUI can pick from it.
+  if [[ "$1" == "chain" ]]; then
+    local rc=0
+    fc -ln -50 2>/dev/null | command alien "$@"
+    rc=$?
+    [[ -r "$ALIEN_HOME/aliases.sh" ]] && source "$ALIEN_HOME/aliases.sh"
+    return $rc
+  fi
   local prev
   prev=$(fc -ln -1 2>/dev/null)
   prev=${prev##[[:space:]]##}

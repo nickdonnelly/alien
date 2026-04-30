@@ -42,6 +42,14 @@ alien() {
     command alien
     return
   fi
+  # `chain` needs more than the previous line — pipe a window of recent
+  # history (oldest first) into the binary so the TUI can pick from it.
+  if [[ "$1" == "chain" ]]; then
+    HISTTIMEFORMAT='' fc -ln -50 2>/dev/null | command alien "$@"
+    local rc=$?
+    [[ -r "$ALIEN_HOME/aliases.sh" ]] && source "$ALIEN_HOME/aliases.sh"
+    return $rc
+  fi
   local prev
   # `fc -ln -1` works in bash too. The leading whitespace is variable across
   # bash versions so strip it.

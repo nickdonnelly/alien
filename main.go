@@ -36,6 +36,8 @@ func main() {
 		fmt.Printf("alien %s\n", version)
 	case "add":
 		cmdAdd(args[1:], prevCmd)
+	case "chain":
+		cmdChain(args[1:])
 	case "ls", "list":
 		cmdList(args[1:])
 	case "show":
@@ -113,6 +115,7 @@ func printHelp() {
   alien <name>                    add an alias from your previous command
   alien <name> -c "command"       add an alias with an explicit command
   alien <name> -m "comment"       add an alias with a description
+  alien chain <name>              pick recent commands from history; chain with &&
 
 ` + bold("MANAGE") + `
   alien list                      pretty list of all aliases
