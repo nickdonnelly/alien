@@ -57,7 +57,7 @@ brews:
     repository:
       owner: nickdonnelly
       name: homebrew-tap-alien
-    description: "Quick command-line aliases. Run a command, like it, type alien <name>."
+    description: "Quick command-line aliases driven by your shell history"
     homepage: "https://gitlab.com/nickdonnelly/alien"
     license: MIT
     dependencies:
