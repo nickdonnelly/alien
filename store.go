@@ -58,6 +58,52 @@ type Store struct {
 
 const storeVersion = 1
 
+// migration is a one-step upgrade applied when an on-disk store has
+// Version == From. After it returns, the store's Version is bumped to
+// From+1; the migration runner walks all migrations in order until the
+// store reaches `storeVersion`.
+type migration struct {
+	From int
+	Apply func(s *Store) error
+}
+
+// migrations lists every schema upgrade we've ever shipped. New entries
+// only — never reorder, never delete, never edit. Bump `storeVersion`
+// when you add one.
+//
+// To add a migration: append `{From: N, Apply: func(s *Store) error { ... }}`
+// where N is the *current* storeVersion before your change, then bump
+// `storeVersion` to N+1.
+var migrations = []migration{
+	// {From: 1, Apply: func(s *Store) error { ... }},
+}
+
+// runMigrations walks `migrations` until the store is at storeVersion.
+// Returns true if anything was applied so the caller knows to persist.
+func runMigrations(s *Store) (changed bool, err error) {
+	for s.Version < storeVersion {
+		applied := false
+		for _, m := range migrations {
+			if m.From == s.Version {
+				if err := m.Apply(s); err != nil {
+					return changed, fmt.Errorf("migrate v%d→v%d: %w", m.From, m.From+1, err)
+				}
+				s.Version = m.From + 1
+				applied = true
+				changed = true
+				break
+			}
+		}
+		if !applied {
+			// No migration registered to leave this version. Nothing we
+			// can do automatically — surface it so the user knows their
+			// store is older than the binary expects.
+			return changed, fmt.Errorf("no migration registered for store version %d", s.Version)
+		}
+	}
+	return changed, nil
+}
+
 func dataDir() string {
 	if d := os.Getenv("ALIEN_HOME"); d != "" {
 		return d
@@ -74,6 +120,24 @@ func dataDir() string {
 
 func storePath() string  { return filepath.Join(dataDir(), "aliases.json") }
 func exportPath() string { return filepath.Join(dataDir(), "aliases.sh") }
+
+// updateStore is the safe path for any read-modify-write on the alias store.
+// It holds an advisory lock around load+mutate+save so concurrent alien
+// processes don't lose each other's writes. Pure reads (cmdList, cmdShow,
+// cmdGet, cmdFzfList, ...) can keep using the bare loadStore — there's
+// nothing to lose.
+func updateStore(mutate func(s *Store) error) error {
+	return withStoreLock(func() error {
+		s, err := loadStore()
+		if err != nil {
+			return err
+		}
+		if err := mutate(s); err != nil {
+			return err
+		}
+		return s.save()
+	})
+}
 
 func loadStore() (*Store, error) {
 	p := storePath()
@@ -99,6 +163,20 @@ func loadStore() (*Store, error) {
 		s.Packs = map[string]InstalledPack{}
 	}
 	s.path = p
+
+	// A v0 file (no `version` key) is interpreted as v1 — that's our
+	// initial schema, predating this comment. Anything newer than the
+	// binary expects is fatal: the user has a newer alien somewhere.
+	if s.Version == 0 {
+		s.Version = 1
+	}
+	if s.Version > storeVersion {
+		return nil, fmt.Errorf("store version %d is newer than this binary supports (v%d)",
+			s.Version, storeVersion)
+	}
+	if _, err := runMigrations(s); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

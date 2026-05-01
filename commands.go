@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -117,26 +118,22 @@ func cmdAdd(args []string, prevCmd string) {
 		os.Exit(1)
 	}
 
-	s, err := loadStore()
-	if err != nil {
+	if err := updateStore(func(s *Store) error {
+		if existing, ok := s.Aliases[name]; ok && !force {
+			errorf("alias %s already exists → %s", bold(name), existing.Command)
+			fmt.Fprintf(os.Stderr, "  use %s to overwrite, or %s to modify\n",
+				cyan("alien add "+name+" --cmd '...' --force"), cyan("alien edit "+name))
+			os.Exit(1)
+		}
+		s.Aliases[name] = Alias{
+			Command:   command,
+			Comment:   comment,
+			Enabled:   true,
+			CreatedAt: time.Now(),
+		}
+		return nil
+	}); err != nil {
 		errorf("%v", err)
-		os.Exit(1)
-	}
-	if existing, ok := s.Aliases[name]; ok && !force {
-		errorf("alias %s already exists → %s", bold(name), existing.Command)
-		fmt.Fprintf(os.Stderr, "  use %s to overwrite, or %s to modify\n",
-			cyan("alien add "+name+" --cmd '...' --force"), cyan("alien edit "+name))
-		os.Exit(1)
-	}
-
-	s.Aliases[name] = Alias{
-		Command:   command,
-		Comment:   comment,
-		Enabled:   true,
-		CreatedAt: time.Now(),
-	}
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
 		os.Exit(1)
 	}
 	successf("aliased %s %s %s", bold(brcyan(name)), dim("→"), command)
@@ -148,11 +145,24 @@ func cmdAdd(args []string, prevCmd string) {
 // ---------- list / show ----------
 
 func cmdList(args []string) {
+	// Agent-friendly flags. `--json` and `--enabled-only` are bare; `--tag`
+	// takes a value. extractFlag consumes a value (it'd treat a bare flag's
+	// next token as the value), so strip bares first via extractBool.
+	args, wantJSON := extractBoolFlag(args, "--json")
+	args, enabledOnly := extractBoolFlag(args, "--enabled-only")
+	_, tagFilter := extractFlag(args, "--tag")
+
 	s, err := loadStore()
 	if err != nil {
 		errorf("%v", err)
 		os.Exit(1)
 	}
+
+	if wantJSON {
+		emitListJSON(s, tagFilter, enabledOnly)
+		return
+	}
+
 	if len(s.Aliases) == 0 {
 		fmt.Fprintf(os.Stderr, "%s no aliases yet. Run a command, then `alien <name>`.\n", brcyan("👽"))
 		return
@@ -282,6 +292,9 @@ func cmdShow(args []string) {
 	fmt.Printf("  %s %s\n", gray("source  :"), src)
 	if a.From != "" {
 		fmt.Printf("  %s %s\n", gray("from    :"), a.From)
+	}
+	if a.UsedCount > 0 {
+		fmt.Printf("  %s %d\n", gray("uses    :"), a.UsedCount)
 	}
 	fmt.Printf("  %s %s\n", gray("created :"), a.CreatedAt.Local().Format("2006-01-02 15:04"))
 	fmt.Println()
@@ -501,6 +514,212 @@ func tabLabel(t string) string {
 	}
 }
 
+// extractBoolFlag strips a bare flag (e.g. `--json`) from args and reports
+// whether it was present. Use this for boolean flags; use extractFlag for
+// `--flag VALUE` flags. Mixing them on a single args slice requires
+// stripping the bare ones first, otherwise extractFlag will swallow a
+// neighboring bool flag as its "value".
+func extractBoolFlag(args []string, flag string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == flag {
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, found
+}
+
+// hasFlag is kept as a non-mutating presence check.
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// listEntry is the wire shape for `alien ls --json`. All fields always
+// present (no omitempty) so agents can `jq '.[].used_count'` without
+// branching on nulls.
+type listEntry struct {
+	Name      string    `json:"name"`
+	Command   string    `json:"command"`
+	Comment   string    `json:"comment"`
+	Source    string    `json:"source"`
+	From      string    `json:"from"`
+	Tags      []string  `json:"tags"`
+	Enabled   bool      `json:"enabled"`
+	UsedCount int       `json:"used_count"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func emitListJSON(s *Store, tagFilter string, enabledOnly bool) {
+	out := make([]listEntry, 0, len(s.Aliases))
+	for _, n := range s.sortedNames() {
+		a := s.Aliases[n]
+		if enabledOnly && !a.Enabled {
+			continue
+		}
+		if tagFilter != "" && !containsString(a.Tags, tagFilter) {
+			continue
+		}
+		tags := a.Tags
+		if tags == nil {
+			tags = []string{} // [] over null for parser ergonomics
+		}
+		out = append(out, listEntry{
+			Name:      n,
+			Command:   a.Command,
+			Comment:   a.Comment,
+			Source:    a.Source,
+			From:      a.From,
+			Tags:      tags,
+			Enabled:   a.Enabled,
+			UsedCount: a.UsedCount,
+			CreatedAt: a.CreatedAt,
+			UpdatedAt: a.UpdatedAt,
+		})
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		errorf("encode json: %v", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+func containsString(ss []string, target string) bool {
+	for _, s := range ss {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------- run / suggest (agent-friendly) ----------
+
+// cmdRun executes an alias's stored command directly, without depending on
+// the user's interactive shell. Useful for agents (each Bash tool call is a
+// fresh shell, so the user's aliases are normally unavailable) and for
+// scripts. Args after <name> are forwarded to the command via positional
+// parameters.
+//
+//	alien run greet world   ->  sh -c 'echo hello $1' alien-run world
+func cmdRun(args []string) {
+	if len(args) < 1 {
+		errorf("usage: alien run <name> [args...]")
+		os.Exit(1)
+	}
+	name := args[0]
+	rest := args[1:]
+
+	s, err := loadStore()
+	if err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
+	a, ok := s.Aliases[name]
+	if !ok {
+		errorf("no alias named %s", bold(name))
+		os.Exit(1)
+	}
+	if !a.Enabled {
+		errorf("%s is disabled — `alien enable %s` to re-enable", bold(name), name)
+		os.Exit(1)
+	}
+
+	// `sh -c CMD NAME ARGS...` makes NAME = $0 and ARGS = $1..$N inside CMD,
+	// which is the standard idiom for forwarding positional args into a
+	// `-c` script. We use "alien-run" as a recognizable $0 for diagnostics.
+	cmdArgs := append([]string{"-c", a.Command, "alien-run"}, rest...)
+	cmd := exec.Command("sh", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	runErr := cmd.Run()
+
+	// Track usage. Best-effort: if anything fails we warn but don't mask
+	// the child's exit code. updateStore() takes the advisory lock, so a
+	// background sync push or another `alien run` won't lose this update.
+	if err := updateStore(func(s *Store) error {
+		entry, ok := s.Aliases[name]
+		if !ok {
+			return nil // alias was deleted between exec and tracking — fine
+		}
+		entry.UsedCount++
+		entry.UpdatedAt = time.Now()
+		s.Aliases[name] = entry
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "%s usage tracking: %v\n", dim("alien:"), err)
+	}
+
+	if runErr == nil {
+		return
+	}
+	if exit, ok := runErr.(*exec.ExitError); ok {
+		os.Exit(exit.ExitCode())
+	}
+	// Spawn failure (sh missing, etc.) — surface it.
+	errorf("run %s: %v", bold(name), runErr)
+	os.Exit(1)
+}
+
+// cmdSuggest reports any alias whose stored command matches the input, after
+// normalizing whitespace on both sides. Exits 0 if at least one match was
+// printed, 1 otherwise. Stays silent on no-match so it composes cleanly:
+//
+//	if name=$(alien suggest 'git status -sb'); then
+//	  alien run "$name"
+//	else
+//	  git status -sb
+//	fi
+func cmdSuggest(args []string) {
+	if len(args) < 1 {
+		errorf("usage: alien suggest <command...>")
+		os.Exit(2)
+	}
+	target := normalizeCommand(strings.Join(args, " "))
+	if target == "" {
+		os.Exit(1)
+	}
+	s, err := loadStore()
+	if err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
+	matches := []string{}
+	for _, n := range s.sortedNames() {
+		a := s.Aliases[n]
+		if !a.Enabled {
+			continue
+		}
+		if normalizeCommand(a.Command) == target {
+			matches = append(matches, n)
+		}
+	}
+	if len(matches) == 0 {
+		os.Exit(1)
+	}
+	for _, n := range matches {
+		fmt.Println(n)
+	}
+}
+
+// normalizeCommand collapses runs of whitespace into a single space and
+// trims leading/trailing whitespace. Suggest's match is intentionally
+// strict — same tokens in the same order — but tolerant of formatting
+// differences a user might apply when typing the same command twice.
+func normalizeCommand(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // ---------- get / export ----------
 
 func cmdGet(args []string) {
@@ -576,9 +795,11 @@ func cmdDelete(args []string) {
 			return
 		}
 	}
-	delete(s.Aliases, name)
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
+	if err := updateStore(func(s *Store) error {
+		delete(s.Aliases, name)
+		return nil
+	}); err != nil {
+		errorf("%v", err)
 		os.Exit(1)
 	}
 	successf("removed %s", bold(name))
@@ -597,33 +818,32 @@ func setEnabled(args []string, target *bool) {
 		os.Exit(1)
 	}
 	name := args[0]
-	s, err := loadStore()
-	if err != nil {
+	var finalEnabled bool
+	if err := updateStore(func(s *Store) error {
+		a, ok := s.Aliases[name]
+		if !ok {
+			errorf("no alias named %s", bold(name))
+			os.Exit(1)
+		}
+		if a.Source == "shell" {
+			errorf("can't toggle %s — it's defined in your shell config", bold(name))
+			fmt.Fprintf(os.Stderr, "  remove or comment it out in your rc, or %s first\n",
+				cyan("alien promote "+name))
+			os.Exit(1)
+		}
+		if target == nil {
+			a.Enabled = !a.Enabled
+		} else {
+			a.Enabled = *target
+		}
+		s.Aliases[name] = a
+		finalEnabled = a.Enabled
+		return nil
+	}); err != nil {
 		errorf("%v", err)
 		os.Exit(1)
 	}
-	a, ok := s.Aliases[name]
-	if !ok {
-		errorf("no alias named %s", bold(name))
-		os.Exit(1)
-	}
-	if a.Source == "shell" {
-		errorf("can't toggle %s — it's defined in your shell config", bold(name))
-		fmt.Fprintf(os.Stderr, "  remove or comment it out in your rc, or %s first\n",
-			cyan("alien promote "+name))
-		os.Exit(1)
-	}
-	if target == nil {
-		a.Enabled = !a.Enabled
-	} else {
-		a.Enabled = *target
-	}
-	s.Aliases[name] = a
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
-		os.Exit(1)
-	}
-	if a.Enabled {
+	if finalEnabled {
 		successf("enabled %s", bold(brcyan(name)))
 	} else {
 		successf("disabled %s", bold(name))
@@ -637,23 +857,20 @@ func cmdComment(args []string) {
 	}
 	name := args[0]
 	comment := strings.TrimSpace(strings.Join(args[1:], " "))
-	s, err := loadStore()
-	if err != nil {
+	if err := updateStore(func(s *Store) error {
+		a, ok := s.Aliases[name]
+		if !ok {
+			errorf("no alias named %s", bold(name))
+			os.Exit(1)
+		}
+		// Comments are alien-only metadata, so even shell-source entries
+		// can carry one — it doesn't touch the user's rc. Pack-installed
+		// entries can also be commented without detaching them.
+		a.Comment = comment
+		s.Aliases[name] = a
+		return nil
+	}); err != nil {
 		errorf("%v", err)
-		os.Exit(1)
-	}
-	a, ok := s.Aliases[name]
-	if !ok {
-		errorf("no alias named %s", bold(name))
-		os.Exit(1)
-	}
-	// Comments are alien-only metadata, so even shell-source entries can
-	// carry one — it doesn't touch the user's rc. Pack-installed entries
-	// can also be commented without detaching them.
-	a.Comment = comment
-	s.Aliases[name] = a
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
 		os.Exit(1)
 	}
 	if comment == "" {
@@ -741,23 +958,34 @@ enabled:  %s
 		os.Exit(1)
 	}
 
-	a.Command = newCmd
-	a.Comment = newComment
-	a.Enabled = newEnabledStr == "true" || newEnabledStr == "yes" || newEnabledStr == "1"
-
-	if newName != name {
-		if _, exists := s.Aliases[newName]; exists {
-			errorf("alias %s already exists", bold(newName))
+	// Apply under the lock. We deliberately re-read inside the closure
+	// rather than reusing the `s` we loaded for the editor template — the
+	// editor session can be arbitrarily long, so the on-disk state may
+	// have changed underneath us (e.g. a sync pull, or another alien
+	// invocation). We only patch the entry the user was editing.
+	enabled := newEnabledStr == "true" || newEnabledStr == "yes" || newEnabledStr == "1"
+	if err := updateStore(func(s *Store) error {
+		cur, ok := s.Aliases[name]
+		if !ok {
+			errorf("alias %s no longer exists — it was removed during editing", bold(name))
 			os.Exit(1)
 		}
-		delete(s.Aliases, name)
-		s.Aliases[newName] = a
-	} else {
-		s.Aliases[name] = a
-	}
-
-	if err := s.save(); err != nil {
-		errorf("save: %v", err)
+		cur.Command = newCmd
+		cur.Comment = newComment
+		cur.Enabled = enabled
+		if newName != name {
+			if _, exists := s.Aliases[newName]; exists {
+				errorf("alias %s already exists", bold(newName))
+				os.Exit(1)
+			}
+			delete(s.Aliases, name)
+			s.Aliases[newName] = cur
+		} else {
+			s.Aliases[name] = cur
+		}
+		return nil
+	}); err != nil {
+		errorf("%v", err)
 		os.Exit(1)
 	}
 	successf("updated %s", bold(brcyan(newName)))

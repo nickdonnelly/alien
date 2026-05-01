@@ -74,6 +74,16 @@ func main() {
 		cmdUfo(args[1:])
 	case "sync":
 		cmdSync(args[1:])
+	case "run":
+		cmdRun(args[1:])
+	case "suggest":
+		cmdSuggest(args[1:])
+	case "skill":
+		cmdSkill(args[1:])
+	case "stats":
+		cmdStats(args[1:])
+	case "doctor":
+		cmdDoctor(args[1:])
 	default:
 		// Default: alien <name> [-c "..." -m "..."] is treated as add.
 		// Reject anything that *looks* like a subcommand typo to avoid
@@ -139,6 +149,17 @@ func printHelp() {
   alien sync init <repo-url>      version-control + cross-machine sync
   alien sync push|pull|status     manage the alien data dir as a git repo
   alien sync auto on|off          auto-pull on shell startup, auto-push on save
+
+` + bold("AGENT MODE") + `
+  alien run <name> [args]         execute an alias by reference (no shell needed)
+  alien ls --json                 machine-readable listing for AI agents
+  alien suggest "<command>"       find an alias matching a verbatim command
+  alien skill install             install the agent skill into Claude/Cursor/Codex/...
+  alien skill targets             list available agent-skill install targets
+
+` + bold("INSIGHT") + `
+  alien stats [--top N]           usage tracking (top-N most-used, never-used)
+  alien doctor                    self-diagnostic: hook? fzf? sync? skills?
 
 ` + bold("SHELL") + `
   alien init zsh|bash             print integration code for your shell

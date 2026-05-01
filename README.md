@@ -11,6 +11,9 @@ prompt. Run a command, decide it's worth keeping, type `alien <name>`, and
 the alias is live in your current shell. No rc-file editing, no `exec zsh`.
 
 
+https://github.com/user-attachments/assets/3f9586c9-135e-4ed1-9df0-3468995ff495
+
+
 ---
 
 ## Highlights
@@ -36,6 +39,12 @@ the alias is live in your current shell. No rc-file editing, no `exec zsh`.
 - **zsh and bash** — works on macOS bash 3.2 too, no upgrade required.
 
 ## Install
+
+### Pre-built binaries
+
+Grab the latest release for your platform from the
+[releases page](https://github.com/nick-donnelly/alien/releases) — drop
+the binary on `$PATH`, then wire up the shell hook (see *Manual* below).
 
 ### From source
 
@@ -201,6 +210,78 @@ Set these before sourcing the hook (e.g. in `~/.zshrc`):
 | `ALIEN_FZF_OPTS`  | (empty)                       | extra flags forwarded to fzf           |
 | `ALIEN_RC_FILES`  | auto-detected                 | colon-separated rc files to scan       |
 
+## Use with AI agents
+
+`alien` saves *your* tokens too — when you let an AI coding agent reuse
+your aliases instead of emitting their underlying long commands. A small,
+agent-friendly CLI surface and an opt-in Claude Code skill make this
+work across fresh `bash -c` invocations (the kind agents emit).
+
+### Three commands the agent uses
+
+| Command                          | What it does                              |
+|----------------------------------|-------------------------------------------|
+| `alien ls --json [--tag t]`      | machine-readable listing                  |
+| `alien suggest "<command>"`      | print alias name if any matches verbatim  |
+| `alien run <name> [args...]`     | execute the alias by reference            |
+
+- `alien run` doesn't depend on `aliases.sh` being sourced — it executes
+  the stored command directly via `sh -c`. Stdio is inherited; the exit
+  code passes through. Args after `<name>` are forwarded as `$1`, `$2`...
+- `alien run` increments `used_count`, so the agent (and you) can see
+  which aliases are actually getting used.
+
+### Multi-target skill installer
+
+Run `alien skill install` (no arguments) to open an interactive picker
+that lets you choose which agent tools should learn about your aliases.
+Available targets:
+
+| Target        | Path                                  | Tool                       |
+|---------------|---------------------------------------|----------------------------|
+| `claude-user` | `~/.claude/skills/alien/SKILL.md`     | Claude Code (user-level)   |
+| `claude-md`   | `./CLAUDE.md`                         | Claude Code (project)      |
+| `cursor`      | `./.cursor/rules/alien.mdc`           | Cursor                     |
+| `agents-md`   | `./AGENTS.md`                         | Codex CLI / generic agents |
+| `aider`       | `./CONVENTIONS.md`                    | Aider                      |
+
+```sh
+alien skill install                  # picker
+alien skill install --target cursor  # one specific target
+alien skill install --all            # everything
+alien skill install --target claude-md --target agents-md
+alien skill targets                  # list with install status
+alien skill uninstall --target ...   # clean removal
+```
+
+Project-level targets (`claude-md`, `cursor`, `agents-md`, `aider`) write
+to the current working directory — run them inside the repo you want the
+agent to know about. Append-mode targets fence their content with
+sentinel comments so re-installing replaces our section without
+duplicating it, and uninstalling leaves the rest of the file alone.
+
+Nothing under `~/.claude/` is written without you running this command.
+
+## Insight
+
+```sh
+alien stats              # most-used aliases, cleanup candidates, totals
+alien stats --top 5      # narrow the most-used list
+alien stats --json       # machine-readable
+alien doctor             # self-diagnostic: hook? fzf? sync? skills?
+alien doctor --json
+```
+
+`alien doctor` runs through the common failure modes (rc hook not
+sourced, fzf missing, store unwritable, sync misconfigured, no skills
+installed) and reports each. Run it first if anything seems off.
+
+`alien stats` summarises usage tracked by `alien run`. Picker
+invocations route through `alien run`, so they count too. Aliases the
+user types directly at the prompt and the shell expands itself are
+*not* counted, so the totals are a lower bound — useful but not
+exhaustive.
+
 ## Storage
 
 Aliases live in `$ALIEN_HOME/aliases.json` (default `~/.config/alien/`).
@@ -240,18 +321,24 @@ Issues and PRs welcome.
 
 - **New built-in packs** — drop a `name.ufo.json` into `packs/` and open
   a PR. Keep them small, opinionated, and well-described.
-- **Bug reports** — please include `alien --version`, your shell, fzf
-  version, and a reproduction.
-- **Patches** — `go build` and the existing smoke-test paths must keep
-  working: `alien fzf`, `alien tab next/prev`, `alien ufo install -y`,
-  `alien sync init` against a local bare repo.
+- **Bug reports** — please include `alien doctor` output, `alien --version`,
+  your shell, fzf version, and a reproduction.
+- **Patches** — `go vet`, `go test -race`, and the existing smoke-test
+  paths must keep working: `alien fzf`, `alien tab next/prev`,
+  `alien ufo install -y`, `alien sync init` against a local bare repo.
 
 ```sh
 git clone https://github.com/nick-donnelly/alien
 cd alien
-go build -o alien .
 go vet ./...
+go test -race -count=1 ./...
+go build -o alien .
 ```
+
+CI runs `go vet` and `go test -race -count=1` on Linux + macOS plus a
+cross-build matrix (`darwin/amd64`, `darwin/arm64`, `linux/amd64`,
+`linux/arm64`). Tagged `vX.Y.Z` pushes trigger a Goreleaser run that
+publishes binaries and tarballs to the GitHub Releases page.
 
 ## Uninstall
 
