@@ -15,6 +15,9 @@
 : "${ALIEN_HOME:=${XDG_CONFIG_HOME:-$HOME/.config}/alien}"
 : "${ALIEN_KEYBIND:=\C-g}" # Ctrl-G; set to "" to skip binding
 : "${ALIEN_FZF_OPTS:=}"
+# Tab-insert mode (alias "name" vs expanded "command") is read from
+# `alien config` (set it with: alien config set tab-insert command). Export
+# ALIEN_TAB_INSERT to override the stored setting for this shell only.
 : "${ALIEN_TRACK:=1}" # set to 0 to disable usage tracking
 
 # Source active aliases on startup. The Go binary regenerates this file after
@@ -168,6 +171,25 @@ _alien_run_fzf() {
     $ALIEN_FZF_OPTS
 }
 
+# _alien_tab_text echoes what Tab should insert for the selected alias: the
+# alias name (default) or its expanded command. The mode comes from the
+# ALIEN_TAB_INSERT override if set, else `alien config get tab-insert`. On any
+# lookup miss it falls back to the name so Tab is never a no-op.
+_alien_tab_text() {
+  local name=$1 cmd mode
+  mode=${ALIEN_TAB_INSERT:-$(command alien config get tab-insert 2>/dev/null)}
+  case "$mode" in
+  command | cmd | expanded)
+    cmd=$(command alien get "$name" 2>/dev/null)
+    if [[ -n "$cmd" ]]; then
+      printf '%s' "$cmd"
+      return
+    fi
+    ;;
+  esac
+  printf '%s' "$name"
+}
+
 # Readline binding (`bind -x`) target. Bash exposes the prompt buffer as
 # READLINE_LINE / READLINE_POINT; we manipulate those for the insert/run cases.
 _alien_fzf_widget() {
@@ -193,7 +215,7 @@ _alien_fzf_widget() {
     READLINE_POINT=0
     ;;
   tab)
-    READLINE_LINE+="$name "
+    READLINE_LINE+="$(_alien_tab_text "$name") "
     READLINE_POINT=${#READLINE_LINE}
     ;;
   ctrl-e)
@@ -225,7 +247,7 @@ _alien_pick_cli() {
     eval -- "$cmd"
     ;;
   tab)
-    printf '%s\n' "$name"
+    printf '%s\n' "$(_alien_tab_text "$name")"
     ;;
   ctrl-e)
     command alien edit "$name"

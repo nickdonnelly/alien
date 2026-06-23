@@ -107,6 +107,9 @@ func cmdAdd(args []string, prevCmd string) {
 	if command == "" {
 		command = strings.TrimSpace(prevCmd)
 	}
+	// Resolve line continuations / embedded newlines into a clean single-line
+	// command before anything stores or exports it (see sanitizeCommand).
+	command = sanitizeCommand(command)
 	if command == "" {
 		errorf("no command to alias — run a command first, then `alien %s`, or use --cmd", name)
 		os.Exit(1)
@@ -733,6 +736,33 @@ func validateCommandText(cmd string) error {
 	return nil
 }
 
+// backslashNewlineRe matches a shell line-continuation: a backslash at the
+// end of a physical line, plus the newline (and any leading whitespace on the
+// continued line, which the user added only for readability).
+var backslashNewlineRe = regexp.MustCompile(`\\\r?\n[ \t]*`)
+
+// hardNewlineRe matches a run of newlines (with surrounding blank space) that
+// is NOT a continuation — i.e. genuinely separate statements.
+var hardNewlineRe = regexp.MustCompile(`[ \t]*\r?\n[ \t\r\n]*`)
+
+// sanitizeCommand resolves embedded newlines so the stored command is always a
+// safe single physical line for `alias name='...'`. Aliases are a single-line
+// shell construct: the body is re-tokenized when the alias runs, so a stray
+// continuation backslash or raw newline corrupts the arguments (e.g. the
+// backslash reaches the program as `-\`, or the newline splits it into two
+// commands).
+//
+// A backslash-newline is a line continuation: the shell joins the lines with
+// nothing, so we drop the backslash, the newline, and the cosmetic indent that
+// followed it. Any newline that remains separates statements, so it becomes
+// "; " — the canonical way to put more than one statement in an alias.
+func sanitizeCommand(cmd string) string {
+	cmd = backslashNewlineRe.ReplaceAllString(cmd, "")
+	cmd = hardNewlineRe.ReplaceAllString(cmd, "; ")
+	cmd = strings.TrimRight(cmd, "; \t")
+	return strings.TrimSpace(cmd)
+}
+
 // normalizeCommand collapses runs of whitespace into a single space and
 // trims leading/trailing whitespace. Suggest's match is intentionally
 // strict — same tokens in the same order — but tolerant of formatting
@@ -966,7 +996,7 @@ enabled:  %s
 		os.Exit(1)
 	}
 	newName := strings.TrimSpace(parsed["name"])
-	newCmd := strings.TrimSpace(parsed["command"])
+	newCmd := sanitizeCommand(parsed["command"])
 	newComment := strings.TrimSpace(parsed["comment"])
 	newEnabledStr := strings.ToLower(strings.TrimSpace(parsed["enabled"]))
 

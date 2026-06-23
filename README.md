@@ -201,13 +201,30 @@ are gitignored. Conflicts surface as standard git conflict markers in
 
 ### Configuration
 
-Set these before sourcing the hook (e.g. in `~/.zshrc`):
+Preferences live in `config.json` under `ALIEN_HOME` (`~/.config/alien`). Manage
+them with `alien config`:
+
+```sh
+alien config                       # show all settings and their values
+alien config set tab-insert command  # Tab in the picker inserts the expanded command
+alien config set tab-insert name     # …or just the alias name (the default)
+alien config get tab-insert
+```
+
+| Setting       | Default | Purpose                                                        |
+|---------------|---------|----------------------------------------------------------------|
+| `tab-insert`  | `name`  | Tab in the picker inserts the alias `name` or expanded `command` |
+
+Environment variables (set before sourcing the hook, e.g. in `~/.zshrc`) cover
+the rest and override the stored config where they overlap:
 
 | Variable          | Default                       | Purpose                                |
 |-------------------|-------------------------------|----------------------------------------|
 | `ALIEN_HOME`      | `$XDG_CONFIG_HOME/alien`      | where `aliases.json` lives             |
 | `ALIEN_KEYBIND`   | `^G` (zsh) / `\C-g` (bash)    | picker keybinding; empty disables      |
 | `ALIEN_FZF_OPTS`  | (empty)                       | extra flags forwarded to fzf           |
+| `ALIEN_TAB_INSERT`| (from `config`)               | per-shell override of the `tab-insert` setting |
+| `ALIEN_TRACK`     | `1`                           | usage tracking; `0` disables           |
 | `ALIEN_RC_FILES`  | auto-detected                 | colon-separated rc files to scan       |
 
 ## Use with AI agents

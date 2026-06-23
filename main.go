@@ -24,6 +24,11 @@ func main() {
 	var prevCmd string
 	args, prevCmd = extractFlag(args, "--prev-cmd")
 
+	// Make sure config.toml exists with documented defaults. Best-effort: any
+	// invocation creates it once so the file is there to read and edit, but a
+	// failure here must never block the actual command.
+	ensureConfig()
+
 	if len(args) == 0 {
 		printHelp()
 		return
@@ -64,6 +69,8 @@ func main() {
 		cmdEdit(args[1:])
 	case "init", "shell-init":
 		cmdInit(args[1:])
+	case "config":
+		cmdConfig(args[1:])
 	case "path":
 		fmt.Println(storePath())
 	case "import-shell":
@@ -168,6 +175,7 @@ func printHelp() {
 
 ` + bold("SHELL") + `
   alien init zsh|bash             print integration code for your shell
+  alien config [get|set <k> <v>]  view or change preferences (e.g. tab-insert)
   alien export                    print sourceable alias lines
   alien get <name>                print just the command (used by widget)
 

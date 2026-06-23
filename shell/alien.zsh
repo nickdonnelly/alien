@@ -11,6 +11,9 @@
 : ${ALIEN_HOME:="${XDG_CONFIG_HOME:-$HOME/.config}/alien"}
 : ${ALIEN_KEYBIND:="^G"}            # Ctrl-G; set to "" to skip binding
 : ${ALIEN_FZF_OPTS:=""}             # extra flags appended to fzf
+# Tab-insert mode (alias "name" vs expanded "command") is read from
+# `alien config` (set it with: alien config set tab-insert command). Export
+# ALIEN_TAB_INSERT to override the stored setting for this shell only.
 : ${ALIEN_TRACK:=1}                 # set to 0 to disable usage tracking
 
 # Source the active aliases on startup. The Go binary regenerates this file
@@ -144,9 +147,27 @@ a() {
 # `alien fzf` (col1 = name, col2 = pretty display) and dispatches based on
 # which key the user pressed inside fzf:
 #   enter -> run the alias's command in the current shell
-#   tab   -> insert the alias name into the command line
+#   tab   -> insert the alias into the command line (the name by default, or
+#            the expanded command when ALIEN_TAB_INSERT=command)
 #   e     -> open `alien edit <name>`
 #   d     -> open `alien delete <name>`
+
+# _alien_tab_text echoes what Tab should insert for the selected alias: the
+# alias name (default) or its expanded command. The mode comes from the
+# ALIEN_TAB_INSERT override if set, else `alien config get tab-insert`. On any
+# lookup miss it falls back to the name so Tab is never a no-op.
+_alien_tab_text() {
+  local name=$1 cmd mode
+  mode=${ALIEN_TAB_INSERT:-$(command alien config get tab-insert 2>/dev/null)}
+  if [[ "$mode" == (command|cmd|expanded) ]]; then
+    cmd=$(command alien get "$name" 2>/dev/null)
+    if [[ -n "$cmd" ]]; then
+      print -r -- "$cmd"
+      return
+    fi
+  fi
+  print -r -- "$name"
+}
 
 _alien_run_fzf() {
   # Reset the active tab so each picker invocation starts on "all". Users
@@ -200,7 +221,7 @@ _alien_fzf_widget() {
       zle accept-line
       ;;
     tab)
-      LBUFFER+="$name "
+      LBUFFER+="$(_alien_tab_text "$name") "
       zle redisplay
       ;;
     ctrl-e)
@@ -246,9 +267,9 @@ _alien_pick_cli() {
       eval -- "$cmd"
       ;;
     tab)
-      # Prefill the next prompt with the alias name + a trailing space so
-      # the user can keep typing args before hitting enter.
-      print -z -- "$name "
+      # Prefill the next prompt with the alias (name or expanded command, per
+      # ALIEN_TAB_INSERT) + a trailing space so the user can keep typing args.
+      print -z -- "$(_alien_tab_text "$name") "
       ;;
     ctrl-e)
       command alien edit "$name"
