@@ -55,23 +55,21 @@ func cmdChain(args []string) {
 
 	command := strings.Join(picked, " && ")
 
-	s, err := loadStore()
+	err = updateStore(func(s *Store) error {
+		if existing, ok := s.Aliases[name]; ok && !force {
+			errorf("alias %s already exists → %s", bold(name), existing.Command)
+			fmt.Fprintf(os.Stderr, "  use %s to overwrite\n",
+				cyan("alien chain "+name+" --force"))
+			os.Exit(1)
+		}
+		s.Aliases[name] = Alias{
+			Command:   command,
+			Enabled:   true,
+			CreatedAt: time.Now(),
+		}
+		return nil
+	})
 	if err != nil {
-		errorf("%v", err)
-		os.Exit(1)
-	}
-	if existing, ok := s.Aliases[name]; ok && !force {
-		errorf("alias %s already exists → %s", bold(name), existing.Command)
-		fmt.Fprintf(os.Stderr, "  use %s to overwrite\n",
-			cyan("alien chain "+name+" --force"))
-		os.Exit(1)
-	}
-	s.Aliases[name] = Alias{
-		Command:   command,
-		Enabled:   true,
-		CreatedAt: time.Now(),
-	}
-	if err := s.save(); err != nil {
 		errorf("save: %v", err)
 		os.Exit(1)
 	}

@@ -82,6 +82,10 @@ func main() {
 		cmdSkill(args[1:])
 	case "stats":
 		cmdStats(args[1:])
+	case "track":
+		cmdTrack(args[1:])
+	case "scan":
+		cmdScan(args[1:])
 	case "doctor":
 		cmdDoctor(args[1:])
 	default:
@@ -159,6 +163,7 @@ func printHelp() {
 
 ` + bold("INSIGHT") + `
   alien stats [--top N]           usage tracking (top-N most-used, never-used)
+  alien scan [-i]                 suggest aliases from your shell history
   alien doctor                    self-diagnostic: hook? fzf? sync? skills?
 
 ` + bold("SHELL") + `

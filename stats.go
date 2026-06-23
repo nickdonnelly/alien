@@ -14,16 +14,41 @@ type statRow struct {
 	Command   string
 	Source    string
 	UsedCount int
-	UpdatedAt time.Time
+	LastUsed  time.Time
+	Last7     int
+	Prev7     int
 	CreatedAt time.Time
 	Enabled   bool
 }
 
-// cmdStats summarises usage. UsedCount is incremented by `alien run`;
-// aliases triggered through the picker route through `alien run` too,
-// but commands typed at the prompt and run via the shell's own alias
-// expansion don't — so the absolute numbers are a lower bound. The
-// pretty output surfaces this with a "tracked invocations" label.
+// trend classifies recent momentum from the daily buckets: more hits in the
+// last 7 days than the 7 before → rising; the inverse (with some prior use)
+// → fading. Empty string when there's no signal either way.
+func (r statRow) trend() string {
+	switch {
+	case r.Last7 > r.Prev7 && r.Last7 > 0:
+		return "rising"
+	case r.Last7 < r.Prev7:
+		return "fading"
+	default:
+		return ""
+	}
+}
+
+// windowHits sums daily buckets with ages in [fromDaysAgo, toDaysAgo).
+func windowHits(daily map[string]int, now time.Time, fromDaysAgo, toDaysAgo int) int {
+	total := 0
+	for i := fromDaysAgo; i < toDaysAgo; i++ {
+		day := now.AddDate(0, 0, -i).Format("2006-01-02")
+		total += daily[day]
+	}
+	return total
+}
+
+// cmdStats summarises usage from the machine-local usage.json. Counts come
+// from the shell tracking hook and `alien run`; pending hits are flushed
+// first so the numbers are current. Counts are per-machine — sync does not
+// carry them.
 func cmdStats(args []string) {
 	args, wantJSON := extractBoolFlag(args, "--json")
 	_, topStr := extractFlag(args, "--top")
@@ -34,17 +59,24 @@ func cmdStats(args []string) {
 		}
 	}
 
+	_ = trackFlush() // best-effort: stats should reflect hits still in the log
+
 	s, err := loadStore()
 	if err != nil {
 		errorf("%v", err)
 		os.Exit(1)
 	}
+	usage := loadUsage()
+	now := time.Now()
 
 	rows := make([]statRow, 0, len(s.Aliases))
 	for n, a := range s.Aliases {
+		e := usage.Aliases[n]
 		rows = append(rows, statRow{
 			Name: n, Command: a.Command, Source: a.Source,
-			UsedCount: a.UsedCount, UpdatedAt: a.UpdatedAt,
+			UsedCount: e.Count, LastUsed: e.LastUsed,
+			Last7:     windowHits(e.Daily, now, 0, 7),
+			Prev7:     windowHits(e.Daily, now, 7, 14),
 			CreatedAt: a.CreatedAt, Enabled: a.Enabled,
 		})
 	}
@@ -89,7 +121,7 @@ func cmdStats(args []string) {
 	fmt.Printf("  %s %s\n", gray("aliases  :"),
 		fmt.Sprintf("%d total · %d user · %d pack · %d shell", len(rows), user, pack, shell))
 	fmt.Printf("  %s %s\n\n", gray("uses     :"),
-		fmt.Sprintf("%d tracked invocations (via `alien run`)", totalUses))
+		fmt.Sprintf("%d tracked invocations (shell + alien run, this machine)", totalUses))
 
 	if len(mostUsed) > 0 {
 		fmt.Println(bold("MOST USED"))
@@ -100,10 +132,15 @@ func cmdStats(args []string) {
 			}
 		}
 		for _, r := range mostUsed {
-			fmt.Printf("  %s  %s  %s\n",
+			extra := relativeAge(r.LastUsed, now)
+			if tr := r.trend(); tr != "" {
+				extra += " · " + tr
+			}
+			fmt.Printf("  %s  %s  %s  %s\n",
 				bold(brcyan(padRight(r.Name, maxName))),
 				dim(fmt.Sprintf("× %-4d", r.UsedCount)),
-				truncate(r.Command, 50))
+				truncate(r.Command, 44),
+				gray(extra))
 		}
 		fmt.Println()
 	}
@@ -123,8 +160,26 @@ func cmdStats(args []string) {
 	}
 
 	if totalUses == 0 && len(rows) > 0 {
-		fmt.Printf("%s no tracked usage yet — invoke aliases via %s to record stats.\n",
+		fmt.Printf("%s no tracked usage yet — use your aliases in a hooked shell, or via %s.\n",
 			dim("hint:"), cyan("alien run <name>"))
+	}
+}
+
+// relativeAge renders a compact "3d ago"-style label; empty for zero times.
+func relativeAge(t time.Time, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Hour:
+		return "just now"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
 	}
 }
 
@@ -135,14 +190,17 @@ func emitStatsJSON(all, mostUsed, neverUsed []statRow, user, pack, shell, totalU
 		Source    string    `json:"source"`
 		UsedCount int       `json:"used_count"`
 		Enabled   bool      `json:"enabled"`
-		UpdatedAt time.Time `json:"updated_at"`
+		LastUsed  time.Time `json:"last_used"`
+		Last7Days int       `json:"last_7_days"`
+		Trend     string    `json:"trend"`
 	}
 	conv := func(rs []statRow) []entry {
 		out := make([]entry, 0, len(rs))
 		for _, r := range rs {
 			out = append(out, entry{
 				Name: r.Name, Command: r.Command, Source: r.Source,
-				UsedCount: r.UsedCount, Enabled: r.Enabled, UpdatedAt: r.UpdatedAt,
+				UsedCount: r.UsedCount, Enabled: r.Enabled,
+				LastUsed: r.LastUsed, Last7Days: r.Last7, Trend: r.trend(),
 			})
 		}
 		return out

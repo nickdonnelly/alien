@@ -15,6 +15,7 @@
 : "${ALIEN_HOME:=${XDG_CONFIG_HOME:-$HOME/.config}/alien}"
 : "${ALIEN_KEYBIND:=\C-g}" # Ctrl-G; set to "" to skip binding
 : "${ALIEN_FZF_OPTS:=}"
+: "${ALIEN_TRACK:=1}" # set to 0 to disable usage tracking
 
 # Source active aliases on startup. The Go binary regenerates this file after
 # every modification so it's always cheap and always current.
@@ -33,6 +34,64 @@ if command -v alien >/dev/null 2>&1; then
     ALIEN_RC_FILES="${_alien_rc%:}" command alien import-shell --quiet
   unset _alien_rc _f
   command alien sync maybe-pull 2>/dev/null
+fi
+
+# ---------------- usage tracking -----------------------------------------
+# Counts real alias invocations. bash 3.2 (macOS default) has no preexec,
+# PS0, or associative arrays, so this reads `history 1` from PROMPT_COMMAND
+# (one fork per prompt — the unavoidable cost on old bash; set ALIEN_TRACK=0
+# to opt out) and matches the first word against a space-delimited name list
+# loaded from names.txt (no fork). Hits append to hits.log; `alien track
+# flush` folds them into usage.json on startup and after alien invocations.
+#
+# Known accuracy limits (fine for frequency telemetry): misses `sudo ll`,
+# `VAR=1 ll`, aliases mid-pipeline, and HISTIGNOREd commands.
+_alien_name_list=""
+_alien_load_names() {
+  _alien_name_list=""
+  [[ -r "$ALIEN_HOME/names.txt" ]] || return 0
+  local _n
+  while IFS= read -r _n; do
+    [[ -n $_n ]] && _alien_name_list+=" $_n"
+  done <"$ALIEN_HOME/names.txt"
+  [[ -n $_alien_name_list ]] && _alien_name_list+=" "
+  return 0
+}
+
+_alien_track_prompt() {
+  [[ -n "$_alien_name_list" ]] || return 0
+  local raw last num w
+  raw=$(HISTTIMEFORMAT='' history 1) || return 0
+  # First prompt of the session: history holds the previous session's last
+  # command — record the baseline, don't count it.
+  if [[ -z "${_alien_last_seen+x}" ]]; then
+    _alien_last_seen="$raw"
+    return 0
+  fi
+  # The raw line includes the history number, so back-to-back identical
+  # commands still count separately while empty prompts (history unchanged)
+  # are skipped.
+  [[ "$raw" == "$_alien_last_seen" ]] && return 0
+  _alien_last_seen="$raw"
+  # Strip "  123* " (number, optional modified-entry star) to get the command.
+  last="${raw#"${raw%%[![:space:]]*}"}"
+  num="${last%%[![:digit:]]*}"
+  last="${last#"$num"}"
+  last="${last#\*}"
+  last="${last#"${last%%[![:space:]]*}"}"
+  w="${last%%[[:space:]]*}"
+  case "$_alien_name_list" in
+  *" $w "*) printf '%s\n' "$w" >>"$ALIEN_HOME/hits.log" ;;
+  esac
+  return 0
+}
+
+if [[ "$ALIEN_TRACK" != 0 && $- == *i* ]] && command -v alien >/dev/null 2>&1; then
+  _alien_load_names
+  unset _alien_last_seen
+  PROMPT_COMMAND="_alien_track_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  # Fold hits from previous sessions into usage.json.
+  command alien track flush 2>/dev/null
 fi
 
 # `alien` wrapper: capture previous command and pass it via --prev-cmd, then
@@ -66,6 +125,12 @@ alien() {
   command alien --prev-cmd "$prev" "$@"
   local rc=$?
   [[ -r "$ALIEN_HOME/aliases.sh" ]] && source "$ALIEN_HOME/aliases.sh"
+  # Refresh the tracking name set (the alias list may have just changed)
+  # and fold any pending hits, detached so it never blocks the prompt.
+  if [[ "$ALIEN_TRACK" != 0 ]]; then
+    _alien_load_names
+    (command alien track flush 2>/dev/null &) 2>/dev/null
+  fi
   (command alien sync maybe-push 2>/dev/null &) 2>/dev/null
   return $rc
 }

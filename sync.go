@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -121,12 +122,53 @@ func cmdSync(args []string) {
 	}
 }
 
+// scpLikeRe matches git's scp-like remote syntax: user@host:path.
+var scpLikeRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:.+$`)
+
+// validateSyncURL rejects remote URLs that git would interpret as something
+// other than a plain remote. `ext::` (and any other `<transport>::` remote
+// helper) executes arbitrary commands; a leading `-` injects flags into the
+// git invocation. Local paths are allowed only when explicitly requested —
+// they're almost always a typo in `sync init`, but tests and advanced users
+// need them.
+func validateSyncURL(url string, allowLocal bool) error {
+	if strings.TrimSpace(url) == "" {
+		return fmt.Errorf("empty repo URL")
+	}
+	if strings.HasPrefix(url, "-") {
+		return fmt.Errorf("repo URL %q starts with '-' — refusing (would be parsed as a git flag)", url)
+	}
+	for _, scheme := range []string{"https://", "http://", "ssh://", "git://"} {
+		if strings.HasPrefix(url, scheme) {
+			return nil
+		}
+	}
+	if scpLikeRe.MatchString(url) {
+		return nil
+	}
+	if filepath.IsAbs(url) || strings.HasPrefix(url, "file://") {
+		if allowLocal || os.Getenv("ALIEN_ALLOW_LOCAL_SYNC") != "" {
+			return nil
+		}
+		return fmt.Errorf("local path remotes need --allow-local: alien sync init --allow-local %s", url)
+	}
+	if strings.Contains(url, "::") {
+		return fmt.Errorf("repo URL %q uses a git remote-helper transport — refusing (these can execute commands)", url)
+	}
+	return fmt.Errorf("unrecognized repo URL %q — expected https://, ssh://, or user@host:path", url)
+}
+
 func cmdSyncInit(args []string) {
+	args, allowLocal := extractBoolFlag(args, "--allow-local")
 	if len(args) < 1 {
 		errorf("usage: alien sync init <repo-url>")
 		os.Exit(1)
 	}
 	url := args[0]
+	if err := validateSyncURL(url, allowLocal); err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
 
 	if _, err := exec.LookPath("git"); err != nil {
 		errorf("git not found on $PATH; install git to use sync")
@@ -164,40 +206,47 @@ func cmdSyncInit(args []string) {
 		// Remote has content. Adopt it. If we have a local aliases.json that
 		// would collide with the one in the remote tree, set it aside so the
 		// user doesn't lose work — git checkout would otherwise refuse.
-		aliasesPath := filepath.Join(dataDir(), "aliases.json")
-		backupPath := aliasesPath + ".alien-backup"
-		hasLocal := false
-		if _, err := os.Stat(aliasesPath); err == nil {
-			hasLocal = true
-			if err := os.Rename(aliasesPath, backupPath); err != nil {
-				errorf("back up local aliases: %v", err)
-				os.Exit(1)
+		// Hold the store lock across the swap so a concurrent alien process
+		// can't write aliases.json mid-adoption.
+		err := withStoreLock(func() error {
+			aliasesPath := filepath.Join(dataDir(), "aliases.json")
+			backupPath := aliasesPath + ".alien-backup"
+			hasLocal := false
+			if _, err := os.Stat(aliasesPath); err == nil {
+				hasLocal = true
+				if err := os.Rename(aliasesPath, backupPath); err != nil {
+					return fmt.Errorf("back up local aliases: %w", err)
+				}
 			}
-		}
-		// Same dance for our generated aliases.sh and any local .gitignore so
-		// they don't trip the checkout.
-		for _, p := range []string{
-			filepath.Join(dataDir(), "aliases.sh"),
-			filepath.Join(dataDir(), ".gitignore"),
-		} {
-			os.Remove(p)
-		}
+			// Same dance for our generated aliases.sh and any local .gitignore so
+			// they don't trip the checkout.
+			for _, p := range []string{
+				filepath.Join(dataDir(), "aliases.sh"),
+				filepath.Join(dataDir(), ".gitignore"),
+			} {
+				os.Remove(p)
+			}
 
-		if out, err := gitRun("checkout", "-b", "main", "origin/main"); err != nil {
-			// Restore the backup if checkout failed so we don't leave the
-			// user with no aliases.
-			if hasLocal {
-				os.Rename(backupPath, aliasesPath)
+			if out, err := gitRun("checkout", "-b", "main", "origin/main"); err != nil {
+				// Restore the backup if checkout failed so we don't leave the
+				// user with no aliases.
+				if hasLocal {
+					os.Rename(backupPath, aliasesPath)
+				}
+				return fmt.Errorf("adopt remote: %v\n%s", err, out)
 			}
-			errorf("adopt remote: %v\n%s", err, out)
+			// Refresh the aliases.sh export from the freshly pulled aliases.json.
+			if s, err := loadStore(); err == nil {
+				_ = s.writeShellExport()
+			}
+			if hasLocal {
+				warnf("your previous aliases.json was saved to %s — merge by hand if needed", backupPath)
+			}
+			return nil
+		})
+		if err != nil {
+			errorf("%v", err)
 			os.Exit(1)
-		}
-		// Refresh the aliases.sh export from the freshly pulled aliases.json.
-		if s, err := loadStore(); err == nil {
-			_ = s.writeShellExport()
-		}
-		if hasLocal {
-			warnf("your previous aliases.json was saved to %s — merge by hand if needed", backupPath)
 		}
 		successf("adopted aliases from %s", url)
 	} else {

@@ -94,38 +94,67 @@ func loadBuiltinPack(name string) ([]byte, bool) {
 	return data, true
 }
 
+// checkSHA256 computes the digest of data and, when want is non-empty,
+// fails closed on a mismatch. want accepts an optional "sha256:" prefix
+// and is case-insensitive. Returns the full hex digest either way so
+// installs can record what they actually got.
+func checkSHA256(data []byte, want string) (string, error) {
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	want = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(want)), "sha256:")
+	if want != "" && want != got {
+		return got, fmt.Errorf("pack checksum mismatch:\n  want sha256 %s\n  got  sha256 %s", want, got)
+	}
+	return got, nil
+}
+
 // resolvePack loads a pack from a built-in name, local path, or http(s) URL.
-// Returns the parsed pack along with a human-readable origin descriptor that
-// will be stored in InstalledPack.Source.
-func resolvePack(ref string) (*Pack, string, error) {
+// Returns the parsed pack, a human-readable origin descriptor for
+// InstalledPack.Source, and the content's sha256 digest. A non-empty
+// wantSHA pins the content: mismatch is an error before any parsing.
+func resolvePack(ref, wantSHA string) (*Pack, string, string, error) {
 	switch {
 	case strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://"):
+		if strings.HasPrefix(ref, "http://") {
+			warnf("downloading pack over plain http — content can be tampered with in transit; prefer https or pin with --sha256")
+		}
 		data, err := fetchURL(ref)
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
-		sum := sha256.Sum256(data)
+		digest, err := checkSHA256(data, wantSHA)
+		if err != nil {
+			return nil, "", "", err
+		}
 		fmt.Fprintf(os.Stderr, "%s downloaded %s (%d bytes, sha256 %s)\n",
-			brcyan("👽"), ref, len(data), hex.EncodeToString(sum[:8]))
+			brcyan("👽"), ref, len(data), digest[:16])
 		p, err := parsePack(data)
-		return p, ref, err
+		return p, ref, digest, err
 
 	case strings.ContainsAny(ref, "/.") || filepath.IsAbs(ref):
 		data, err := os.ReadFile(ref)
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
+		}
+		digest, err := checkSHA256(data, wantSHA)
+		if err != nil {
+			return nil, "", "", err
 		}
 		p, err := parsePack(data)
 		abs, _ := filepath.Abs(ref)
-		return p, abs, err
+		return p, abs, digest, err
 
 	default:
 		// Built-in.
 		if data, ok := loadBuiltinPack(ref); ok {
+			digest, err := checkSHA256(data, wantSHA)
+			if err != nil {
+				return nil, "", "", err
+			}
 			p, err := parsePack(data)
-			return p, "builtin:" + ref, err
+			return p, "builtin:" + ref, digest, err
 		}
-		return nil, "", fmt.Errorf("no built-in pack named %q (try `alien ufo list`)", ref)
+		return nil, "", "", fmt.Errorf("no built-in pack named %q (try `alien ufo list`)", ref)
 	}
 }
 
@@ -216,7 +245,7 @@ func defaultDecisions(p *Pack, s *Store) []InstallDecision {
 
 // applyInstall writes the chosen decisions to the store under Source=pack:<name>
 // and records an InstalledPack entry for clean uninstall later.
-func applyInstall(s *Store, p *Pack, packOrigin string, decisions []InstallDecision) (installed int, skipped int, renamed int) {
+func applyInstall(s *Store, p *Pack, packOrigin, packSHA string, decisions []InstallDecision) (installed int, skipped int, renamed int) {
 	source := "pack:" + p.UFO.Name
 	now := time.Now()
 	claimed := make([]string, 0, len(decisions))
@@ -249,6 +278,7 @@ func applyInstall(s *Store, p *Pack, packOrigin string, decisions []InstallDecis
 		Version:     p.UFO.Version,
 		Description: p.UFO.Description,
 		Source:      packOrigin,
+		SHA256:      packSHA,
 		InstalledAt: now,
 		AliasNames:  claimed,
 	}
@@ -361,7 +391,7 @@ func cmdUfoShow(args []string) {
 		errorf("usage: alien ufo show <pack>")
 		os.Exit(1)
 	}
-	p, origin, err := resolvePack(args[0])
+	p, origin, _, err := resolvePack(args[0], "")
 	if err != nil {
 		errorf("%v", err)
 		os.Exit(1)
@@ -402,6 +432,7 @@ func cmdUfoShow(args []string) {
 }
 
 func cmdUfoInstall(args []string) {
+	args, wantSHA := extractFlag(args, "--sha256")
 	var nonInteractive bool
 	positional := []string{}
 	for _, a := range args {
@@ -413,11 +444,11 @@ func cmdUfoInstall(args []string) {
 		}
 	}
 	if len(positional) < 1 {
-		errorf("usage: alien ufo install <pack-or-path>")
+		errorf("usage: alien ufo install <pack-or-path> [--sha256 <hex>] [-y]")
 		os.Exit(1)
 	}
 
-	p, origin, err := resolvePack(positional[0])
+	p, origin, digest, err := resolvePack(positional[0], wantSHA)
 	if err != nil {
 		errorf("%v", err)
 		os.Exit(1)
@@ -454,7 +485,7 @@ func cmdUfoInstall(args []string) {
 
 	var installed, skipped, renamed int
 	if err := updateStore(func(s *Store) error {
-		installed, skipped, renamed = applyInstall(s, p, origin, decisions)
+		installed, skipped, renamed = applyInstall(s, p, origin, digest, decisions)
 		return nil
 	}); err != nil {
 		errorf("%v", err)

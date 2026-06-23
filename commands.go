@@ -117,6 +117,10 @@ func cmdAdd(args []string, prevCmd string) {
 		errorf("refusing to create an alias whose command starts with `alien` (would loop)")
 		os.Exit(1)
 	}
+	if err := validateCommandText(command); err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
 
 	if err := updateStore(func(s *Store) error {
 		if existing, ok := s.Aliases[name]; ok && !force {
@@ -293,8 +297,8 @@ func cmdShow(args []string) {
 	if a.From != "" {
 		fmt.Printf("  %s %s\n", gray("from    :"), a.From)
 	}
-	if a.UsedCount > 0 {
-		fmt.Printf("  %s %d\n", gray("uses    :"), a.UsedCount)
+	if uses := usageCounts()[name]; uses > 0 {
+		fmt.Printf("  %s %d\n", gray("uses    :"), uses)
 	}
 	fmt.Printf("  %s %s\n", gray("created :"), a.CreatedAt.Local().Format("2006-01-02 15:04"))
 	fmt.Println()
@@ -559,6 +563,7 @@ type listEntry struct {
 }
 
 func emitListJSON(s *Store, tagFilter string, enabledOnly bool) {
+	uses := usageCounts()
 	out := make([]listEntry, 0, len(s.Aliases))
 	for _, n := range s.sortedNames() {
 		a := s.Aliases[n]
@@ -580,7 +585,7 @@ func emitListJSON(s *Store, tagFilter string, enabledOnly bool) {
 			From:      a.From,
 			Tags:      tags,
 			Enabled:   a.Enabled,
-			UsedCount: a.UsedCount,
+			UsedCount: uses[n],
 			CreatedAt: a.CreatedAt,
 			UpdatedAt: a.UpdatedAt,
 		})
@@ -645,16 +650,10 @@ func cmdRun(args []string) {
 	runErr := cmd.Run()
 
 	// Track usage. Best-effort: if anything fails we warn but don't mask
-	// the child's exit code. updateStore() takes the advisory lock, so a
-	// background sync push or another `alien run` won't lose this update.
-	if err := updateStore(func(s *Store) error {
-		entry, ok := s.Aliases[name]
-		if !ok {
-			return nil // alias was deleted between exec and tracking — fine
-		}
-		entry.UsedCount++
-		entry.UpdatedAt = time.Now()
-		s.Aliases[name] = entry
+	// the child's exit code. Counts live in the machine-local usage.json
+	// (not the synced store) so tracking never generates sync churn.
+	if err := updateUsage(func(u *UsageDB) error {
+		u.record(name, 1, time.Now())
 		return nil
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "%s usage tracking: %v\n", dim("alien:"), err)
@@ -681,6 +680,11 @@ func cmdRun(args []string) {
 //	  git status -sb
 //	fi
 func cmdSuggest(args []string) {
+	// `alien suggest --history` is a discoverability alias for `alien scan`.
+	if rest, history := extractBoolFlag(args, "--history"); history {
+		cmdScan(rest)
+		return
+	}
 	if len(args) < 1 {
 		errorf("usage: alien suggest <command...>")
 		os.Exit(2)
@@ -710,6 +714,23 @@ func cmdSuggest(args []string) {
 	for _, n := range matches {
 		fmt.Println(n)
 	}
+}
+
+// validateCommandText rejects control characters that have no business in a
+// stored command. Newlines and tabs are allowed — multi-line commands are
+// legal inside single quotes. Anything else below 0x20 (and DEL) is almost
+// always a paste accident, and raw escape bytes would corrupt aliases.sh
+// and the picker display.
+func validateCommandText(cmd string) error {
+	for _, r := range cmd {
+		if r == '\n' || r == '\t' {
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("command contains control character %q — refusing to store it", r)
+		}
+	}
+	return nil
 }
 
 // normalizeCommand collapses runs of whitespace into a single space and
@@ -957,6 +978,10 @@ enabled:  %s
 		errorf("invalid alias name %q", newName)
 		os.Exit(1)
 	}
+	if err := validateCommandText(newCmd); err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
 
 	// Apply under the lock. We deliberately re-read inside the closure
 	// rather than reusing the `s` we loaded for the editor template — the
@@ -1066,4 +1091,3 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
-

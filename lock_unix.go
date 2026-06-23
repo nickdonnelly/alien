@@ -10,24 +10,29 @@ import (
 	"time"
 )
 
-// withStoreLock acquires an exclusive advisory lock on a sentinel file in
-// $ALIEN_HOME, runs fn, and releases the lock. Used to wrap any
-// load-mutate-save sequence so two concurrent alien processes don't lose
-// each other's writes (e.g. an interactive `alien add` racing the
-// background `alien sync maybe-push` after a previous call).
+// withStoreLock guards any load-mutate-save sequence on aliases.json so two
+// concurrent alien processes don't lose each other's writes (e.g. an
+// interactive `alien add` racing the background `alien sync maybe-push`).
+// withUsageLock guards usage.json the same way, on its own sentinel so
+// usage flushes never contend with alias edits.
+func withStoreLock(fn func() error) error { return withLock(".lock", fn) }
+func withUsageLock(fn func() error) error { return withLock(".usage.lock", fn) }
+
+// withLock acquires an exclusive advisory lock on the named sentinel file in
+// $ALIEN_HOME, runs fn, and releases the lock.
 //
-// We lock a separate `.lock` file rather than aliases.json itself so the
+// We lock a separate sentinel rather than the data file itself so the
 // existing atomic write pattern (write `.tmp`, rename) still works without
 // fighting the lock semantics.
 //
 // flock(2) advisory locks are released automatically when the process
 // exits, so a crashed alien can't permanently wedge the store.
-func withStoreLock(fn func() error) error {
+func withLock(name string, fn func() error) error {
 	dir := dataDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	lockPath := filepath.Join(dir, ".lock")
+	lockPath := filepath.Join(dir, name)
 
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // cmdDoctor runs a series of self-diagnostic checks and reports the result
@@ -21,6 +22,8 @@ func cmdDoctor(args []string) {
 	checks = append(checks, checkBinary())
 	checks = append(checks, checkStorePath())
 	checks = append(checks, checkStoreLoads())
+	checks = append(checks, checkUsageTracking())
+	checks = append(checks, checkScanCandidates())
 	checks = append(checks, checkFzf())
 	checks = append(checks, checkShellHook())
 	checks = append(checks, checkGitForSync())
@@ -72,7 +75,9 @@ type checkResult struct {
 	Hint   string `json:"hint,omitempty"`
 }
 
-func ok(name, detail string) checkResult { return checkResult{Name: name, Level: levelOK, Detail: detail} }
+func ok(name, detail string) checkResult {
+	return checkResult{Name: name, Level: levelOK, Detail: detail}
+}
 func warn(name, detail, hint string) checkResult {
 	return checkResult{Name: name, Level: levelWarn, Detail: detail, Hint: hint}
 }
@@ -132,7 +137,51 @@ func checkStoreLoads() checkResult {
 		return fail("aliases.json", err.Error(),
 			"the file may be corrupt or from a newer alien — back it up and inspect")
 	}
-	return ok("aliases.json", fmt.Sprintf("v%d, %d aliases, %d packs", s.Version, len(s.Aliases), len(s.Packs)))
+	detail := fmt.Sprintf("v%d, %d aliases, %d packs", s.Version, len(s.Aliases), len(s.Packs))
+	if dv := diskStoreVersion(); dv > 0 && dv < storeVersion {
+		return warn("aliases.json", detail,
+			fmt.Sprintf("on-disk schema is v%d — it migrates in memory and persists as v%d on the next write", dv, storeVersion))
+	}
+	return ok("aliases.json", detail)
+}
+
+// checkUsageTracking looks for hits that have been sitting in hits.log for
+// a long time — a sign the shell hook is appending but nothing flushes
+// (e.g. an old hook without the flush call).
+func checkUsageTracking() checkResult {
+	fi, err := os.Stat(hitsPath())
+	if err != nil {
+		return ok("usage tracking", "no pending hits")
+	}
+	if time.Since(fi.ModTime()) > 24*time.Hour {
+		return warn("usage tracking",
+			"hits.log has entries pending for over a day",
+			"run `alien track flush`; the shell hook flushes on startup — re-source `alien init zsh|bash`")
+	}
+	return ok("usage tracking", fmt.Sprintf("%d bytes pending flush", fi.Size()))
+}
+
+// checkScanCandidates surfaces history-derived alias suggestions as an
+// informational line. Capped to the most recent history (the scan pipeline
+// is cheap, but doctor should stay snappy).
+func checkScanCandidates() checkResult {
+	s, err := loadStore()
+	if err != nil {
+		return ok("history scan", "skipped (store unreadable)")
+	}
+	history, _ := readScanHistorySources()
+	if len(history) > 5000 {
+		history = history[len(history)-5000:]
+	}
+	if len(history) == 0 {
+		return ok("history scan", "no shell history found")
+	}
+	n := len(scanCandidates(history, s, nameOnPath, 5))
+	if n > 0 {
+		return ok("history scan",
+			fmt.Sprintf("%d alias candidate(s) in your history — run `alien scan`", n))
+	}
+	return ok("history scan", "no new candidates")
 }
 
 func checkFzf() checkResult {
