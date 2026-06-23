@@ -295,14 +295,24 @@ func cmdSyncPush(args []string) {
 		msg = defaultCommitMessage()
 	}
 
-	if out, err := gitRun("add", "aliases.json", ".gitignore"); err != nil {
+	// Ensure .gitignore is in place so generated/local-only files (aliases.sh,
+	// sync.json, .lock, .tab, …) don't show up as untracked and cause confusing
+	// commit-time output.
+	if _, err := os.Stat(filepath.Join(dataDir(), ".gitignore")); errors.Is(err, os.ErrNotExist) {
+		if err := writeGitignore(); err != nil {
+			errorf("write .gitignore: %v", err)
+			os.Exit(1)
+		}
+	}
+
+	if out, err := gitRun("add", ".gitignore", "aliases.json"); err != nil {
 		errorf("git add: %v\n%s", err, out)
 		os.Exit(1)
 	}
 	// If nothing changed, `commit` exits 1; tolerate that.
 	out, err := gitRun("commit", "-m", msg)
 	if err != nil {
-		if strings.Contains(out, "nothing to commit") {
+		if strings.Contains(out, "nothing to commit") || strings.Contains(out, "nothing added to commit") || strings.Contains(out, "no changes added to commit") {
 			infof("no local changes to push")
 		} else {
 			errorf("git commit: %v\n%s", err, out)
@@ -312,7 +322,7 @@ func cmdSyncPush(args []string) {
 		successf("committed: %s", msg)
 	}
 
-	out, err = gitRun("push")
+	out, err = gitRun("push", "origin", "main")
 	if err != nil {
 		errorf("git push: %v\n%s", err, out)
 		os.Exit(1)
