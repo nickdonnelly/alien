@@ -450,3 +450,45 @@ func TestCLIVersionAndHelp(t *testing.T) {
 		t.Errorf("path output: %q", r.stdout)
 	}
 }
+
+// --enabled-only and --tag scope the human-readable listing, not just --json.
+func TestCLIListFiltersApplyWithoutJSON(t *testing.T) {
+	home := t.TempDir()
+	seedStore(t, home, `{
+  "version": 2,
+  "aliases": {
+    "gs": {"command": "git status", "enabled": true, "tags": ["git"]},
+    "gd": {"command": "git diff", "enabled": false, "tags": ["git"]},
+    "dc": {"command": "docker compose", "enabled": true, "tags": ["docker"]}
+  }
+}`)
+
+	r := mustRun(t, home, "", "ls", "--enabled-only")
+	if strings.Contains(r.stdout, "gd") {
+		t.Errorf("--enabled-only still lists the disabled alias:\n%s", r.stdout)
+	}
+	for _, want := range []string{"gs", "dc"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("--enabled-only dropped enabled alias %q:\n%s", want, r.stdout)
+		}
+	}
+	// The footer summarises the rows actually printed.
+	if !strings.Contains(r.stderr, "2 aliases") {
+		t.Errorf("footer should count the filtered rows; got %q", r.stderr)
+	}
+
+	r = mustRun(t, home, "", "ls", "--tag", "docker")
+	if strings.Contains(r.stdout, "gs") || strings.Contains(r.stdout, "gd") {
+		t.Errorf("--tag docker listed non-docker aliases:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "dc") {
+		t.Errorf("--tag docker dropped the matching alias:\n%s", r.stdout)
+	}
+
+	// Combining both filters leaves nothing here, which must not look like an
+	// empty store.
+	r = mustRun(t, home, "", "ls", "--tag", "nope")
+	if !strings.Contains(r.stderr, "no aliases match") {
+		t.Errorf("empty filter result should say so; got %q", r.stderr)
+	}
+}

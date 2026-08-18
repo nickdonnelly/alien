@@ -232,3 +232,76 @@ func TestSuggestNormalization(t *testing.T) {
 		}
 	}
 }
+
+// A pack re-install replaces its InstalledPack record. Entries the previous
+// install claimed but the new one doesn't must be removed at that point —
+// `ufo uninstall` only walks the current AliasNames, so anything left behind
+// is orphaned in the store forever.
+func TestApplyInstallDropsUnclaimedFromPreviousInstall(t *testing.T) {
+	s := &Store{Aliases: map[string]Alias{}, Packs: map[string]InstalledPack{}}
+
+	v1 := &Pack{
+		UFO:     PackMeta{Name: "demo", Version: "1.0.0"},
+		Aliases: map[string]PackEntry{"a": {Command: "echo a"}, "b": {Command: "echo b"}},
+	}
+	applyInstall(s, v1, "builtin:demo", "", defaultDecisions(v1, s))
+
+	// The user detaches "b"'s sibling-to-be so we can prove detached entries
+	// survive; "b" itself stays pack-owned and is dropped from v2.
+	s.Aliases["kept"] = Alias{Command: "echo kept", Source: "pack:demo", Enabled: true}
+	pack := s.Packs["demo"]
+	pack.AliasNames = append(pack.AliasNames, "kept", "detached")
+	s.Packs["demo"] = pack
+	s.Aliases["detached"] = Alias{Command: "echo detached", Source: "", Enabled: true}
+
+	v2 := &Pack{
+		UFO:     PackMeta{Name: "demo", Version: "2.0.0"},
+		Aliases: map[string]PackEntry{"a": {Command: "echo a2"}},
+	}
+	applyInstall(s, v2, "builtin:demo", "", defaultDecisions(v2, s))
+
+	if _, ok := s.Aliases["b"]; ok {
+		t.Error("alias 'b' dropped by the v2 pack should not survive re-install")
+	}
+	if _, ok := s.Aliases["kept"]; ok {
+		t.Error("stale pack-owned alias 'kept' should be removed on re-install")
+	}
+	if _, ok := s.Aliases["detached"]; !ok {
+		t.Error("user-detached alias should be left alone on re-install")
+	}
+	if got := s.Aliases["a"].Command; got != "echo a2" {
+		t.Errorf("alias 'a' command = %q; want the v2 command", got)
+	}
+
+	// Nothing pack-owned should be left over once the pack is uninstalled.
+	applyUninstall(s, "demo")
+	for n, a := range s.Aliases {
+		if a.Source == "pack:demo" {
+			t.Errorf("alias %q still owned by pack:demo after uninstall", n)
+		}
+	}
+}
+
+// Non-interactive install must not overwrite a shell-imported alias: that
+// entry mirrors a definition in the user's rc that alien doesn't own.
+func TestCLIUfoInstallRenamesShellConflict(t *testing.T) {
+	home := t.TempDir()
+	mustRun(t, home, "alias ll='ls -F'\n", "import-shell")
+	if e := findEntry(t, listJSON(t, home), "ll"); e.Source != "shell" {
+		t.Fatalf("setup: ll source = %q; want shell", e.Source)
+	}
+
+	path := filepath.Join(t.TempDir(), "demo.ufo.json")
+	if err := os.WriteFile(path, []byte(fixturePack), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, home, "", "ufo", "install", path, "-y")
+
+	entries := listJSON(t, home)
+	if e := findEntry(t, entries, "ll"); e.Source != "shell" || e.Command != "ls -F" {
+		t.Errorf("shell alias clobbered: source %q, command %q", e.Source, e.Command)
+	}
+	if e := findEntry(t, entries, "demo-ll"); e.Source != "pack:demo" {
+		t.Errorf("pack entry should install under the renamed key; got source %q", e.Source)
+	}
+}

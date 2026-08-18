@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestShellQuote(t *testing.T) {
 	cases := []struct {
@@ -60,5 +63,44 @@ func TestMatchesTab(t *testing.T) {
 			t.Errorf("case %d: matchesTab(source=%q, tab=%q) = %v; want %v",
 				i, c.a.Source, c.tab, got, c.want)
 		}
+	}
+}
+
+// truncate and padRight measure width in runes. Byte slicing would split a
+// multi-byte character, emitting invalid UTF-8 that renders as a replacement
+// glyph, and would over-count widths so columns stop lining up.
+func TestTruncateAndPadRightAreRuneAware(t *testing.T) {
+	truncCases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"ls -al", 10, "ls -al"},      // shorter than the limit: unchanged
+		{"ls -al", 6, "ls -al"},       // exactly the limit: unchanged
+		{"abcdefg", 4, "abc…"},        // ASCII cut
+		{"echo ▲▲▲▲▲", 8, "echo ▲▲…"}, // multi-byte cut lands on a rune boundary
+		{"▲▲▲", 1, "…"},
+		{"▲▲▲", 0, "▲▲▲"}, // non-positive width disables truncation
+	}
+	for _, c := range truncCases {
+		got := truncate(c.in, c.n)
+		if got != c.want {
+			t.Errorf("truncate(%q, %d) = %q; want %q", c.in, c.n, got, c.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("truncate(%q, %d) produced invalid UTF-8: %q", c.in, c.n, got)
+		}
+		if n := utf8.RuneCountInString(got); c.n > 0 && n > c.n {
+			t.Errorf("truncate(%q, %d) = %q, %d runes wide; want at most %d", c.in, c.n, got, n, c.n)
+		}
+	}
+
+	// Equal rune counts must pad to equal widths regardless of encoding size.
+	if a, b := padRight("▲▲▲", 6), padRight("abc", 6); utf8.RuneCountInString(a) != utf8.RuneCountInString(b) {
+		t.Errorf("padRight width mismatch: %q (%d runes) vs %q (%d runes)",
+			a, utf8.RuneCountInString(a), b, utf8.RuneCountInString(b))
+	}
+	if got := padRight("▲▲▲", 2); got != "▲▲▲" {
+		t.Errorf("padRight(%q, 2) = %q; want the input unchanged", "▲▲▲", got)
 	}
 }

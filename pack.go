@@ -273,6 +273,25 @@ func applyInstall(s *Store, p *Pack, packOrigin, packSHA string, decisions []Ins
 		s.Packs = map[string]InstalledPack{}
 	}
 	sort.Strings(claimed)
+	// Re-installing the same pack replaces its InstalledPack record wholesale.
+	// Anything the previous install claimed but this one doesn't would then be
+	// invisible to `ufo uninstall` (it only walks the current AliasNames) and
+	// would linger forever. Drop those, but leave alone any entry the user has
+	// since detached — a different Source means it's no longer ours.
+	if prev, ok := s.Packs[p.UFO.Name]; ok {
+		stillClaimed := make(map[string]bool, len(claimed))
+		for _, n := range claimed {
+			stillClaimed[n] = true
+		}
+		for _, n := range prev.AliasNames {
+			if stillClaimed[n] {
+				continue
+			}
+			if a, ok := s.Aliases[n]; ok && a.Source == source {
+				delete(s.Aliases, n)
+			}
+		}
+	}
 	s.Packs[p.UFO.Name] = InstalledPack{
 		Name:        p.UFO.Name,
 		Version:     p.UFO.Version,
@@ -462,9 +481,12 @@ func cmdUfoInstall(args []string) {
 
 	if nonInteractive {
 		// Auto-deconflict: keep all selected, rename conflicts to <pack>-<name>.
+		// Every conflict kind is renamed, shell-imported ones included — those
+		// mirror a definition in the user's rc that alien doesn't own, so
+		// overwriting the entry would silently desync the store from the rc.
 		for i := range decisions {
 			d := &decisions[i]
-			if d.Conflict == ConflictUser || d.Conflict == ConflictPack {
+			if d.Conflict != NoConflict {
 				d.TargetName = p.UFO.Name + "-" + d.OriginalName
 				if _, clash := s.Aliases[d.TargetName]; clash {
 					d.Skip = true

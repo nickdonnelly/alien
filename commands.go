@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Accept the standard identifier shape OR a run of two-plus dots (so the
@@ -174,14 +175,29 @@ func cmdList(args []string) {
 		fmt.Fprintf(os.Stderr, "%s no aliases yet. Run a command, then `alien <name>`.\n", brcyan("👽"))
 		return
 	}
-	names := s.sortedNames()
+	// --enabled-only / --tag scope the pretty listing too, not just --json.
+	names := make([]string, 0, len(s.Aliases))
+	for _, n := range s.sortedNames() {
+		a := s.Aliases[n]
+		if enabledOnly && !a.Enabled {
+			continue
+		}
+		if tagFilter != "" && !containsString(a.Tags, tagFilter) {
+			continue
+		}
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "%s no aliases match that filter.\n", brcyan("👽"))
+		return
+	}
 	maxName := 0
 	maxCmd := 0
 	for _, n := range names {
 		if len(n) > maxName {
 			maxName = len(n)
 		}
-		if l := len(s.Aliases[n].Command); l > maxCmd {
+		if l := utf8.RuneCountInString(s.Aliases[n].Command); l > maxCmd {
 			maxCmd = l
 		}
 	}
@@ -220,15 +236,18 @@ func cmdList(args []string) {
 		line := fmt.Sprintf("%s %s  %s  %s", statusGlyph, nameStr, cmdStr, tail)
 		fmt.Println(line)
 	}
-	u, p, sh := countSources(s)
+	// Summarise the rows we actually printed, so the footer agrees with the
+	// listing when --enabled-only / --tag narrowed it.
+	u, p, sh := countSourcesOf(s, names)
 	fmt.Fprintf(os.Stderr, "\n%s %d aliases  %s\n",
-		dim("alien:"), len(names), sourceSummary(u, p, sh, countEnabled(s)))
+		dim("alien:"), len(names), sourceSummary(u, p, sh, countEnabledOf(s, names)))
 }
 
-func countEnabled(s *Store) int {
+// countEnabledOf counts the enabled entries among the named ones.
+func countEnabledOf(s *Store, names []string) int {
 	n := 0
-	for _, a := range s.Aliases {
-		if a.Enabled {
+	for _, name := range names {
+		if s.Aliases[name].Enabled {
 			n++
 		}
 	}
@@ -237,8 +256,13 @@ func countEnabled(s *Store) int {
 
 // countSources returns (user, pack, shell) counts.
 func countSources(s *Store) (user, pack, shell int) {
-	for _, a := range s.Aliases {
-		switch {
+	return countSourcesOf(s, s.sortedNames())
+}
+
+// countSourcesOf is countSources restricted to the named entries.
+func countSourcesOf(s *Store, names []string) (user, pack, shell int) {
+	for _, name := range names {
+		switch a := s.Aliases[name]; {
 		case a.Source == "":
 			user++
 		case strings.HasPrefix(a.Source, "pack:"):
@@ -395,7 +419,7 @@ func columnWidths(s *Store, names []string) (nameW, cmdW, fromW int) {
 			nameW = len(n)
 		}
 		a := s.Aliases[n]
-		if l := len(a.Command); l > cmdW {
+		if l := utf8.RuneCountInString(a.Command); l > cmdW {
 			cmdW = l
 		}
 		if l := visibleLen(sourceCell(a.Source, a.From)); l > fromW {
@@ -1093,24 +1117,32 @@ func cmdInit(args []string) {
 
 // ---------- helpers ----------
 
+// padRight pads s to n columns. Widths are counted in runes, not bytes, so
+// a command with multi-byte characters lines up with its ASCII neighbours
+// (and matches visibleLen, which already counts runes).
 func padRight(s string, n int) string {
-	if len(s) >= n {
+	w := utf8.RuneCountInString(s)
+	if w >= n {
 		return s
 	}
-	return s + strings.Repeat(" ", n-len(s))
+	return s + strings.Repeat(" ", n-w)
 }
 
+// truncate shortens s to at most n columns, appending an ellipsis when it
+// cuts. It slices runes rather than bytes — byte slicing splits multi-byte
+// characters and emits invalid UTF-8, which renders as a replacement glyph.
 func truncate(s string, n int) string {
 	if n <= 0 {
 		return s
 	}
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	if n <= 1 {
-		return s[:n]
+	if n == 1 {
+		return "…"
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
 
 func firstNonEmpty(vals ...string) string {

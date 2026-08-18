@@ -53,7 +53,19 @@ func cmdChain(args []string) {
 		return
 	}
 
-	command := strings.Join(picked, " && ")
+	// History lines are untrusted input like any other command source, so run
+	// them through the same guard `alien add` uses: fold continuations into a
+	// single physical line and reject control bytes that would corrupt
+	// aliases.sh and the picker display.
+	command := sanitizeCommand(strings.Join(picked, " && "))
+	if command == "" {
+		warnf("nothing selected")
+		return
+	}
+	if err := validateCommandText(command); err != nil {
+		errorf("%v", err)
+		os.Exit(1)
+	}
 
 	err = updateStore(func(s *Store) error {
 		if existing, ok := s.Aliases[name]; ok && !force {
