@@ -2,9 +2,10 @@ package main
 
 // User preferences live in $ALIEN_HOME/config.toml (e.g. ~/.config/alien).
 // These are behaviour/UI settings that aren't aliases — currently just the
-// picker's Tab-insert mode. Like usage.json, config.toml stays OUT of the
-// synced store (the sync .gitignore is deny-by-default), so preferences are
-// per-machine.
+// picker's Tab-insert mode. By default config.toml stays OUT of the synced
+// store (the sync .gitignore is deny-by-default), so preferences are
+// per-machine. Syncing it is opt-in: `alien sync config on` (or answering yes
+// at `sync init`) adds it to the allow-list — see syncedFiles in sync.go.
 //
 // The file is created automatically on first run with every option documented
 // by a comment, so it doubles as the reference for what can be tuned. alien

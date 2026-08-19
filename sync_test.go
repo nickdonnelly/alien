@@ -159,6 +159,117 @@ func TestCLISyncAdoptPopulatedRemote(t *testing.T) {
 	}
 }
 
+func TestCLISyncConfigOptIn(t *testing.T) {
+	setupSyncEnv(t)
+	remote := makeBareRemote(t)
+	home := t.TempDir()
+	mustRun(t, home, "", "gs", "-c", "git status")
+	mustRun(t, home, "", "config", "set", "tab-insert", "command")
+
+	// Opt in non-interactively; config.toml joins the synced set.
+	mustRun(t, home, "", "sync", "init", remote, "--with-config")
+	tracked := strings.Fields(gitInHome(t, home, "ls-files"))
+	want := []string{".gitignore", "aliases.json", "config.toml"}
+	if strings.Join(tracked, ",") != strings.Join(want, ",") {
+		t.Errorf("tracked files = %v; want %v", tracked, want)
+	}
+
+	// A fresh machine adopting the remote inherits the preference.
+	homeB := t.TempDir()
+	r := mustRun(t, homeB, "", "sync", "init", remote)
+	if !strings.Contains(r.stderr, "also syncs your alien config") {
+		t.Errorf("adopt didn't report inherited config sync:\n%s", r.stderr)
+	}
+	if got := mustRun(t, homeB, "", "config", "get", "tab-insert").stdout; got != "command\n" {
+		t.Errorf("adopted config not applied: tab-insert = %q", got)
+	}
+}
+
+func TestCLISyncInitNoConfigByDefault(t *testing.T) {
+	setupSyncEnv(t)
+	remote := makeBareRemote(t)
+	home := t.TempDir()
+	mustRun(t, home, "", "gs", "-c", "git status")
+	mustRun(t, home, "", "config", "set", "tab-insert", "command")
+
+	// No flag + non-tty stdin → preferences stay per-machine (historical default).
+	mustRun(t, home, "", "sync", "init", remote)
+	tracked := strings.Fields(gitInHome(t, home, "ls-files"))
+	want := []string{".gitignore", "aliases.json"}
+	if strings.Join(tracked, ",") != strings.Join(want, ",") {
+		t.Errorf("tracked files = %v; want %v (config.toml must not sync by default)", tracked, want)
+	}
+}
+
+func TestCLISyncConfigToggle(t *testing.T) {
+	setupSyncEnv(t)
+	remote := makeBareRemote(t)
+
+	homeA := t.TempDir()
+	mustRun(t, homeA, "", "gs", "-c", "git status")
+	mustRun(t, homeA, "", "config", "set", "tab-insert", "command")
+	mustRun(t, homeA, "", "sync", "init", remote) // config off
+
+	// Turn config sync on; it tracks and pushes config.toml.
+	mustRun(t, homeA, "", "sync", "config", "on")
+	if !configTracked(t, homeA) {
+		t.Fatal("config sync on: config.toml not tracked")
+	}
+
+	// A second machine picks the preference up on pull.
+	homeB := t.TempDir()
+	mustRun(t, homeB, "", "sync", "init", remote)
+	if got := mustRun(t, homeB, "", "config", "get", "tab-insert").stdout; got != "command\n" {
+		t.Errorf("config not propagated on adopt: tab-insert = %q", got)
+	}
+
+	// Turn it back off; config.toml is untracked but survives on disk.
+	mustRun(t, homeA, "", "sync", "config", "off")
+	if configTracked(t, homeA) {
+		t.Error("config sync off: config.toml still tracked")
+	}
+	if got := mustRun(t, homeA, "", "config", "get", "tab-insert").stdout; got != "command\n" {
+		t.Errorf("config.toml lost on toggle off: tab-insert = %q", got)
+	}
+}
+
+func TestCLISyncAdoptBacksUpLocalConfig(t *testing.T) {
+	setupSyncEnv(t)
+	remote := makeBareRemote(t)
+
+	// A publishes aliases + config (tab-insert=command).
+	homeA := t.TempDir()
+	mustRun(t, homeA, "", "gs", "-c", "git status")
+	mustRun(t, homeA, "", "config", "set", "tab-insert", "command")
+	mustRun(t, homeA, "", "sync", "init", remote, "--with-config")
+
+	// B has its own divergent config and then adopts the remote.
+	homeB := t.TempDir()
+	mustRun(t, homeB, "", "config", "set", "tab-insert", "name")
+	mustRun(t, homeB, "", "sync", "init", remote)
+
+	// Remote config wins; B's previous config is preserved as a backup.
+	if got := mustRun(t, homeB, "", "config", "get", "tab-insert").stdout; got != "command\n" {
+		t.Errorf("adopted config = %q; want remote value", got)
+	}
+	backup, err := os.ReadFile(filepath.Join(homeB, "config.toml.alien-backup"))
+	if err != nil {
+		t.Fatalf("local config not backed up: %v", err)
+	}
+	if !strings.Contains(string(backup), `tab-insert = "name"`) {
+		t.Errorf("backup lost local config value:\n%s", backup)
+	}
+}
+
+func configTracked(t *testing.T, home string) bool {
+	t.Helper()
+	out, err := exec.Command("git", "-C", home, "ls-files", "config.toml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-files: %v\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
 func TestCLISyncPushPullRoundTrip(t *testing.T) {
 	setupSyncEnv(t)
 	remote := makeBareRemote(t)

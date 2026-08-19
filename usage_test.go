@@ -202,7 +202,7 @@ func writeGitignoreContentCheck() error {
 	os.Setenv("ALIEN_HOME", dir)
 	defer os.Setenv("ALIEN_HOME", old)
 
-	if err := writeGitignore(); err != nil {
+	if err := writeGitignore(false); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
@@ -213,7 +213,8 @@ func writeGitignoreContentCheck() error {
 	if !strings.Contains(content, "*\n") {
 		return fmt.Errorf(".gitignore lost its deny-by-default rule:\n%s", content)
 	}
-	for _, banned := range []string{"!usage.json", "!hits.log"} {
+	// config.toml is opt-in; the default gitignore must not allow-list it.
+	for _, banned := range []string{"!usage.json", "!hits.log", "!config.toml"} {
 		if strings.Contains(content, banned) {
 			return fmt.Errorf(".gitignore allow-lists %s:\n%s", banned, content)
 		}

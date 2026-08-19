@@ -160,6 +160,7 @@ func printHelp() {
   alien sync init <repo-url>      version-control + cross-machine sync
   alien sync push|pull|status     manage the alien data dir as a git repo
   alien sync auto on|off          auto-pull on shell startup, auto-push on save
+  alien sync config on|off        also sync config.toml (preferences)
 
 ` + bold("AGENT MODE") + `
   alien run <name> [args]         execute an alias by reference (no shell needed)

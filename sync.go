@@ -21,6 +21,11 @@ type SyncConfig struct {
 	AutoPull        bool   `json:"auto_pull"`
 	AutoPush        bool   `json:"auto_push"`
 	ThrottleSeconds int    `json:"throttle_seconds"`
+	// IncludeConfig mirrors whether config.toml is part of the synced set. The
+	// authoritative answer is git tracking (configSynced); this is a cache for
+	// `sync status` so it doesn't have to shell out. It's set when the repo is
+	// initialized or adopted and by `sync config on|off`.
+	IncludeConfig bool `json:"include_config"`
 }
 
 func syncConfigPath() string { return filepath.Join(dataDir(), "sync.json") }
@@ -78,17 +83,46 @@ func gitRepoExists() bool {
 	return false
 }
 
+// syncedFiles is the single source of truth for what the sync repo tracks.
+// aliases.json is always synced; config.toml is opt-in (see `sync config`).
+// Everything else in $ALIEN_HOME (usage.json, sync.json, generated aliases.sh,
+// the lock, …) stays machine-local. Keeping this list in one place is what
+// keeps a future "sync only some config keys" change cheap: only this function
+// and the gitignore writer need to know the set.
+func syncedFiles(includeConfig bool) []string {
+	files := []string{".gitignore", "aliases.json"}
+	if includeConfig {
+		files = append(files, "config.toml")
+	}
+	return files
+}
+
+// configSynced reports whether config.toml is currently part of the synced set,
+// i.e. tracked by git. This — not the sync.json cache — is authoritative,
+// because the gitignore that decides it is itself committed and shared: once
+// any machine starts tracking config.toml, every machine that pulls inherits
+// it. Returns false when there's no repo yet.
+func configSynced() bool {
+	if !gitRepoExists() {
+		return false
+	}
+	_, err := gitRun("ls-files", "--error-unmatch", "config.toml")
+	return err == nil
+}
+
 // writeGitignore allow-lists only the files we want tracked. Everything else
 // in $ALIEN_HOME (generated aliases.sh, sync state, future side files) is
 // ignored. The leading `*` plus negations is the standard "deny by default"
-// pattern.
-func writeGitignore() error {
-	content := `# Managed by alien sync — track only aliases.json
-*
-!.gitignore
-!aliases.json
-`
-	return os.WriteFile(filepath.Join(dataDir(), ".gitignore"), []byte(content), 0o644)
+// pattern. config.toml is allow-listed only when the user opted into syncing
+// preferences.
+func writeGitignore(includeConfig bool) error {
+	var b strings.Builder
+	b.WriteString("# Managed by alien sync — track only the files alien syncs.\n")
+	b.WriteString("*\n")
+	for _, f := range syncedFiles(includeConfig) {
+		b.WriteString("!" + f + "\n")
+	}
+	return os.WriteFile(filepath.Join(dataDir(), ".gitignore"), []byte(b.String()), 0o644)
 }
 
 // ---------- subcommands ----------
@@ -109,6 +143,8 @@ func cmdSync(args []string) {
 		cmdSyncStatus(args[1:])
 	case "auto":
 		cmdSyncAuto(args[1:])
+	case "config":
+		cmdSyncConfig(args[1:])
 	case "forget", "disconnect":
 		cmdSyncForget(args[1:])
 	case "maybe-pull":
@@ -117,7 +153,7 @@ func cmdSync(args []string) {
 		cmdSyncMaybePush(args[1:])
 	default:
 		errorf("unknown subcommand: alien sync %s", args[0])
-		fmt.Fprintln(os.Stderr, "  available: init, push, pull, status, auto, forget")
+		fmt.Fprintln(os.Stderr, "  available: init, push, pull, status, auto, config, forget")
 		os.Exit(1)
 	}
 }
@@ -160,8 +196,14 @@ func validateSyncURL(url string, allowLocal bool) error {
 
 func cmdSyncInit(args []string) {
 	args, allowLocal := extractBoolFlag(args, "--allow-local")
+	args, withConfig := extractBoolFlag(args, "--with-config")
+	args, noConfig := extractBoolFlag(args, "--no-config")
+	if withConfig && noConfig {
+		errorf("--with-config and --no-config are mutually exclusive")
+		os.Exit(1)
+	}
 	if len(args) < 1 {
-		errorf("usage: alien sync init <repo-url>")
+		errorf("usage: alien sync init <repo-url> [--with-config|--no-config]")
 		os.Exit(1)
 	}
 	url := args[0]
@@ -208,6 +250,13 @@ func cmdSyncInit(args []string) {
 		// user doesn't lose work — git checkout would otherwise refuse.
 		// Hold the store lock across the swap so a concurrent alien process
 		// can't write aliases.json mid-adoption.
+		// If the remote tracks config.toml, this repo syncs preferences too; our
+		// local config.toml would collide with the checkout and must be set
+		// aside the same way as aliases.json.
+		remoteHasConfig := false
+		if _, err := gitRun("cat-file", "-e", "origin/main:config.toml"); err == nil {
+			remoteHasConfig = true
+		}
 		err := withStoreLock(func() error {
 			aliasesPath := filepath.Join(dataDir(), "aliases.json")
 			backupPath := aliasesPath + ".alien-backup"
@@ -216,6 +265,17 @@ func cmdSyncInit(args []string) {
 				hasLocal = true
 				if err := os.Rename(aliasesPath, backupPath); err != nil {
 					return fmt.Errorf("back up local aliases: %w", err)
+				}
+			}
+			configPath := filepath.Join(dataDir(), "config.toml")
+			configBackup := configPath + ".alien-backup"
+			hasLocalConfig := false
+			if remoteHasConfig {
+				if _, err := os.Stat(configPath); err == nil {
+					hasLocalConfig = true
+					if err := os.Rename(configPath, configBackup); err != nil {
+						return fmt.Errorf("back up local config: %w", err)
+					}
 				}
 			}
 			// Same dance for our generated aliases.sh and any local .gitignore so
@@ -228,10 +288,13 @@ func cmdSyncInit(args []string) {
 			}
 
 			if out, err := gitRun("checkout", "-b", "main", "origin/main"); err != nil {
-				// Restore the backup if checkout failed so we don't leave the
-				// user with no aliases.
+				// Restore the backups if checkout failed so we don't leave the
+				// user with no aliases or config.
 				if hasLocal {
 					os.Rename(backupPath, aliasesPath)
+				}
+				if hasLocalConfig {
+					os.Rename(configBackup, configPath)
 				}
 				return fmt.Errorf("adopt remote: %v\n%s", err, out)
 			}
@@ -242,27 +305,43 @@ func cmdSyncInit(args []string) {
 			if hasLocal {
 				warnf("your previous aliases.json was saved to %s — merge by hand if needed", backupPath)
 			}
+			if hasLocalConfig {
+				warnf("your previous config.toml was saved to %s — merge by hand if needed", configBackup)
+			}
 			return nil
 		})
 		if err != nil {
 			errorf("%v", err)
 			os.Exit(1)
 		}
+		if configSynced() {
+			infof("this remote also syncs your alien config (preferences)")
+		}
 		successf("adopted aliases from %s", url)
 	} else {
-		// Empty remote: we're authoritative. Make sure .gitignore is present,
-		// then commit and push our current state.
-		if err := writeGitignore(); err != nil {
+		// Empty remote: we're authoritative, so this machine decides whether
+		// preferences sync. Honor an explicit flag; otherwise ask (defaulting
+		// to local, the historical behavior) when we have a terminal.
+		includeConfig := withConfig
+		if !withConfig && !noConfig {
+			includeConfig = askSyncConfig()
+		}
+		// Make sure .gitignore is present, then commit and push our current state.
+		if err := writeGitignore(includeConfig); err != nil {
 			errorf("write .gitignore: %v", err)
 			os.Exit(1)
 		}
-		gitRun("add", ".gitignore", "aliases.json")
+		gitRun(append([]string{"add"}, syncedFiles(includeConfig)...)...)
 		gitRun("commit", "-m", "init alien aliases")
 		if out, err := gitRun("push", "-u", "origin", "main"); err != nil {
 			errorf("initial push: %v\n%s", err, out)
 			os.Exit(1)
 		}
-		successf("initialized %s and pushed", url)
+		if includeConfig {
+			successf("initialized %s and pushed (aliases + config)", url)
+		} else {
+			successf("initialized %s and pushed", url)
+		}
 	}
 
 	cfg, _ := loadSyncConfig()
@@ -270,11 +349,26 @@ func cmdSyncInit(args []string) {
 		cfg = &SyncConfig{ThrottleSeconds: 300}
 	}
 	cfg.RemoteURL = url
+	cfg.IncludeConfig = configSynced()
 	if err := saveSyncConfig(cfg); err != nil {
 		errorf("save sync config: %v", err)
 		os.Exit(1)
 	}
 	infof("sync configured. `alien sync auto on` to enable background sync.")
+}
+
+// askSyncConfig prompts whether to include config.toml (preferences) in the
+// synced store. Defaults to false — preferences stay per-machine — and never
+// blocks when stdin isn't a terminal, so scripted `sync init` without an
+// explicit --with-config/--no-config keeps the historical local-only behavior.
+func askSyncConfig() bool {
+	if !isStdinTTY() {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "%s also sync your alien config (preferences) to this remote? [y/N] ", yellow("?"))
+	var ans string
+	fmt.Scanln(&ans)
+	return strings.ToLower(strings.TrimSpace(ans)) == "y"
 }
 
 func cmdSyncPush(args []string) {
@@ -299,13 +393,13 @@ func cmdSyncPush(args []string) {
 	// sync.json, .lock, .tab, …) don't show up as untracked and cause confusing
 	// commit-time output.
 	if _, err := os.Stat(filepath.Join(dataDir(), ".gitignore")); errors.Is(err, os.ErrNotExist) {
-		if err := writeGitignore(); err != nil {
+		if err := writeGitignore(configSynced()); err != nil {
 			errorf("write .gitignore: %v", err)
 			os.Exit(1)
 		}
 	}
 
-	if out, err := gitRun("add", ".gitignore", "aliases.json"); err != nil {
+	if out, err := gitRun(append([]string{"add"}, syncedFiles(configSynced())...)...); err != nil {
 		errorf("git add: %v\n%s", err, out)
 		os.Exit(1)
 	}
@@ -371,6 +465,11 @@ func cmdSyncStatus(_ []string) {
 		}
 		fmt.Printf("  %s %s\n", gray("auto   :"), auto)
 	}
+	if configSynced() {
+		fmt.Printf("  %s %s\n", gray("config :"), green("synced"))
+	} else {
+		fmt.Printf("  %s %s\n", gray("config :"), gray("local"))
+	}
 	out, _ := gitRun("status", "--short")
 	if strings.TrimSpace(out) == "" {
 		fmt.Printf("  %s %s\n", gray("state  :"), green("clean"))
@@ -412,6 +511,87 @@ func cmdSyncAuto(args []string) {
 		successf("auto-sync enabled (%s)", scope)
 	} else {
 		successf("auto-sync disabled (%s)", scope)
+	}
+}
+
+// cmdSyncConfig toggles whether config.toml (preferences) is part of the synced
+// store. `on` starts tracking it; `off` stops, leaving the file on disk but
+// machine-local again. Because the deciding .gitignore is itself synced, the
+// change is committed (and pushed) so other machines converge on the next pull.
+func cmdSyncConfig(args []string) {
+	if !gitRepoExists() {
+		errorf("not a sync repo — run `alien sync init <url>` first")
+		os.Exit(1)
+	}
+	if len(args) < 1 {
+		if configSynced() {
+			infof("config sync is on — config.toml is synced")
+		} else {
+			infof("config sync is off — config.toml stays per-machine")
+		}
+		fmt.Fprintln(os.Stderr, "  usage: alien sync config on|off")
+		return
+	}
+
+	switch args[0] {
+	case "on":
+		if configSynced() {
+			infof("config sync already on")
+			return
+		}
+		ensureConfig() // make sure there's a config.toml to track
+		if err := writeGitignore(true); err != nil {
+			errorf("write .gitignore: %v", err)
+			os.Exit(1)
+		}
+		if out, err := gitRun(append([]string{"add"}, syncedFiles(true)...)...); err != nil {
+			errorf("git add: %v\n%s", err, out)
+			os.Exit(1)
+		}
+		gitRun("commit", "-m", "alien: start syncing config")
+		rememberIncludeConfig(true)
+		pushConfigToggle()
+		successf("config sync on — preferences now sync with your aliases")
+	case "off":
+		if !configSynced() {
+			infof("config sync already off")
+			return
+		}
+		if out, err := gitRun("rm", "--cached", "config.toml"); err != nil {
+			errorf("git rm --cached config.toml: %v\n%s", err, out)
+			os.Exit(1)
+		}
+		if err := writeGitignore(false); err != nil {
+			errorf("write .gitignore: %v", err)
+			os.Exit(1)
+		}
+		gitRun("add", ".gitignore")
+		gitRun("commit", "-m", "alien: stop syncing config")
+		rememberIncludeConfig(false)
+		pushConfigToggle()
+		successf("config sync off — config.toml is per-machine again")
+	default:
+		errorf("usage: alien sync config on|off")
+		os.Exit(1)
+	}
+}
+
+// rememberIncludeConfig updates the sync.json display cache. Best-effort: the
+// authoritative state is git tracking, so a failure here only affects what
+// `sync status` prints.
+func rememberIncludeConfig(on bool) {
+	if cfg, _ := loadSyncConfig(); cfg != nil {
+		cfg.IncludeConfig = on
+		_ = saveSyncConfig(cfg)
+	}
+}
+
+// pushConfigToggle publishes a config on/off commit so other machines converge.
+// A push failure (offline remote) isn't fatal — the commit is local and the
+// next `alien sync push` will carry it.
+func pushConfigToggle() {
+	if out, err := gitRun("push", "origin", "main"); err != nil {
+		warnf("committed locally but couldn't push — run `alien sync push` when the remote is reachable\n%s", out)
 	}
 }
 
@@ -489,7 +669,7 @@ func cmdSyncMaybePush(_ []string) {
 	if strings.TrimSpace(out) == "" {
 		return
 	}
-	gitRun("add", "aliases.json", ".gitignore")
+	gitRun(append([]string{"add"}, syncedFiles(configSynced())...)...)
 	gitRun("commit", "-m", defaultCommitMessage())
 	gitRun("push", "--quiet")
 }
